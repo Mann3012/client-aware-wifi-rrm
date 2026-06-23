@@ -1,5 +1,6 @@
 import datetime
-from sqlalchemy import Column, Integer, Float, String, DateTime
+from sqlalchemy import Column, Integer, Float, String, DateTime, Text
+from src.database.connection import Base
 from src.database.connection import Base
 
 class Telemetry(Base):
@@ -23,6 +24,33 @@ class Telemetry(Base):
     qoe_score = Column(Float, nullable=True)         # Calculated QoE 0-100
     qoe_category = Column(String(50), nullable=True) # Excellent, Good, Fair, Poor
     interference_type = Column(String(50), nullable=True) # None, Microwave, BLE, NeighborAP
+    distance = Column(Float, nullable=True)          # Euclidean distance
+    max_distance = Column(Float, nullable=True)      # Max client distance
+    closest_client = Column(Float, nullable=True)    # Min client distance
+    furthest_client = Column(Float, nullable=True)   # Same as max distance conceptually but stored explicit
+    freq_mhz = Column(Float, nullable=True)          # AP operating frequency in MHz
+    tx_power = Column(Float, nullable=True)          # AP transmit power in dBm
+    wall_count = Column(Integer, nullable=True)      # Number of walls between AP and client
+    wall_loss = Column(Float, nullable=True)         # Obstacle attenuation in dB
+    scenario_name = Column(String(100), default="Normal Office") # Active scenario name
+
+    def __repr__(self):
+        return f"<Telemetry ap_id={self.ap_id} timestamp={self.timestamp} channel={self.channel}>"
+
+class ScenarioEvent(Base):
+    """
+    Model representing an explicit network scenario and its duration.
+    """
+    __tablename__ = "scenario_events"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    ap_id = Column(String(50), index=True, nullable=False)
+    start_time = Column(DateTime, default=datetime.datetime.utcnow, index=True, nullable=False)
+    end_time = Column(DateTime, nullable=True)
+    scenario_name = Column(String(100), nullable=False)
+    root_cause = Column(String(100), nullable=True)
+    recommendation_triggered = Column(String(50), nullable=True)
+    client_topology_snapshot = Column(Text, nullable=True) # JSON snapshot of initial coords
 
     def __repr__(self):
         return f"<Telemetry ap_id={self.ap_id} timestamp={self.timestamp} channel={self.channel}>"
@@ -60,7 +88,9 @@ class Recommendation(Base):
     current_value = Column(String(50), nullable=False)       # Current setting (e.g., "6", "15dBm", "80MHz")
     recommended_value = Column(String(50), nullable=False)   # Recommended setting (e.g., "11", "12dBm", "40MHz")
     confidence = Column(Float, nullable=False)               # Policy rule score / confidence (0.0 to 1.0)
-    reason = Column(String(500), nullable=False)             # Descriptive reason explaining the recommendation
+    root_cause = Column(String(100), nullable=True)          # Explicit root cause (e.g. "MICROWAVE_INTERFERENCE")
+    reason = Column(String(1000), nullable=False)            # Descriptive reason explaining the recommendation (Multiline Causal Chain)
+    expected_qoe_gain = Column(Float, nullable=True)         # Expected QoE increase if action is taken
 
     def __repr__(self):
         return f"<Recommendation ap_id={self.ap_id} action={self.action} recommended_value={self.recommended_value}>"

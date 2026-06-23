@@ -4,8 +4,8 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from src.database.connection import get_db
-from src.database.models import Telemetry, Alert, Recommendation
-from src.api.schemas import TelemetryResponse, AlertResponse, RecommendationResponse, APSummary
+from src.database.models import Telemetry, Alert, Recommendation, ScenarioEvent
+from src.api.schemas import TelemetryResponse, AlertResponse, RecommendationResponse, APSummary, ScenarioEventResponse
 
 router = APIRouter()
 
@@ -135,3 +135,24 @@ def trigger_simulator(db: Session = Depends(get_db)):
         return {"status": "Success", "message": "Simulation step triggered successfully."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to step simulator: {e}")
+
+@router.get("/scenario/history", response_model=List[ScenarioEventResponse])
+def get_scenario_history(
+    ap_id: Optional[str] = Query(None, description="Filter history by AP ID"),
+    limit: int = Query(50, ge=1, le=500),
+    db: Session = Depends(get_db)
+):
+    query = db.query(ScenarioEvent)
+    if ap_id:
+        query = query.filter(ScenarioEvent.ap_id == ap_id)
+    records = query.order_by(ScenarioEvent.start_time.desc()).limit(limit).all()
+    return records
+
+@router.post("/scenario/set")
+def set_scenario(ap_id: str = Query(...), scenario_name: str = Query(...)):
+    from src.api.main import app_simulator
+    if not app_simulator:
+        raise HTTPException(status_code=503, detail="Simulator is not active.")
+    app_simulator.force_scenario(ap_id, scenario_name)
+    app_simulator.step() # Instantly apply it
+    return {"status": "Success", "message": f"Scenario {scenario_name} forced on {ap_id}"}

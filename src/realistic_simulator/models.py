@@ -8,13 +8,20 @@ class APState:
     channel: int
     channel_width: int  # in MHz (e.g., 20, 40, 80)
     base_noise: float = -95.0
+    x: float = 0.0
+    y: float = 0.0
+    freq_mhz: float = 5180.0
+    tx_power_dbm: float = 20.0
+    channel_capacity_mbps: float = 300.0
 
 @dataclass
 class ClientState:
     """Represents a connected client."""
     client_id: str
-    distance_meters: float
     demand_mbps: float
+    x: float = 0.0
+    y: float = 0.0
+    wall_count: int = 0
 
 @dataclass
 class QoE:
@@ -44,7 +51,13 @@ class TelemetryRecord:
     retry_rate: float
     qoe_score: float
     qoe_category: str
-    recommendation: str
+    interference_type: str = "None"
+    distance: float = 0.0
+    freq_mhz: float = 5180.0
+    tx_power: float = 20.0
+    wall_count: int = 0
+    wall_loss: float = 0.0
+    recommendations: list = None
 
     def to_dict(self) -> dict:
         return {
@@ -58,5 +71,11 @@ class TelemetryRecord:
             "retry_rate": round(self.retry_rate, 4),
             "qoe_score": round(self.qoe_score, 1),
             "qoe_category": self.qoe_category,
-            "recommendation": self.recommendation
+            "interference_type": self.interference_type,
+            "distance": round(self.distance, 2),
+            "freq_mhz": round(self.freq_mhz, 1),
+            "tx_power": round(self.tx_power, 1),
+            "wall_count": self.wall_count,
+            "wall_loss": round(self.wall_loss, 2),
+            "recommendations": self.recommendations or []
         }

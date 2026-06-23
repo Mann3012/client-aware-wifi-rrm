@@ -126,3 +126,15 @@ temp_telemetry_test.csv
 # PID files written by background processes (uvicorn, gunicorn, etc.).
 # =============================================================================
 *.pid
+
+venv/
+verify_env/
+testenv1/
+test_venv/
+test_install_venv/
+
+*.db
+*.db.bak
+__pycache__/
+
+Reading material/

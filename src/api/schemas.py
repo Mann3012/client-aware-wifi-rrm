@@ -14,6 +14,29 @@ class TelemetryBase(BaseModel):
     qoe_score: Optional[float] = None
     qoe_category: Optional[str] = None
     interference_type: Optional[str] = None
+    distance: Optional[float] = None
+    max_distance: Optional[float] = None
+    closest_client: Optional[float] = None
+    furthest_client: Optional[float] = None
+    freq_mhz: Optional[float] = None
+    tx_power: Optional[float] = None
+    wall_count: Optional[int] = None
+    wall_loss: Optional[float] = None
+    scenario_name: Optional[str] = None
+
+class ScenarioEventBase(BaseModel):
+    ap_id: str
+    scenario_name: str
+    root_cause: Optional[str] = None
+    recommendation_triggered: Optional[str] = None
+    client_topology_snapshot: Optional[str] = None
+
+class ScenarioEventResponse(ScenarioEventBase):
+    id: int
+    start_time: datetime
+    end_time: Optional[datetime] = None
+    
+    model_config = ConfigDict(from_attributes=True)
 
 class TelemetryCreate(TelemetryBase):
     pass
@@ -50,7 +73,9 @@ class RecommendationBase(BaseModel):
     current_value: str
     recommended_value: str
     confidence: float
+    root_cause: Optional[str] = None
     reason: str
+    expected_qoe_gain: Optional[float] = None
 
 class RecommendationCreate(RecommendationBase):
     pass
