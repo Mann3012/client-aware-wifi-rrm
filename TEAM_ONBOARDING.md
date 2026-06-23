@@ -1,9 +1,4 @@
 # Team Onboarding: WiFi Radio Resource Management (RRM) Prototype
-
-Welcome to the team! This document is designed to get you up to speed on the project. It assumes you are a software engineer who knows Python but has no prior experience with WiFi networking or wireless systems.
-
----
-
 ## Project Goal
 
 The goal of this project is to build and evaluate a closed-loop controller that optimizes WiFi Access Point (AP) settings in real time. 
