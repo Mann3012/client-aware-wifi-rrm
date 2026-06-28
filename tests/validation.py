@@ -135,6 +135,54 @@ class TestRRMComponentIntegration(unittest.TestCase):
         self.assertNotEqual(recommendation["recommended_value"], "36")
         self.assertTrue(recommendation["confidence"] >= 0.90)
 
+    def test_dashboard_consistency(self):
+        """Verify that REST API responses match SQLite DB records exactly for dashboard consistency."""
+        from src.api.routes import get_telemetry
+        
+        # Insert a known telemetry row
+        time_now = datetime.datetime.utcnow()
+        telemetry = Telemetry(
+            timestamp=time_now,
+            ap_id="AP_CONSISTENT_01",
+            channel=11,
+            rssi=-55.0,
+            snr=40.0,
+            noise_floor=-95.0,
+            airtime_utilization=0.10,
+            retry_rate=0.01,
+            client_count=3,
+            qoe_score=98.5,
+            qoe_category="Excellent",
+            interference_type="None",
+            scenario_name="Normal Office"
+        )
+        self.db.add(telemetry)
+        self.db.commit()
+        
+        # Query REST API route function directly
+        api_data = get_telemetry(ap_id="AP_CONSISTENT_01", limit=100, db=self.db)
+        
+        self.assertTrue(len(api_data) > 0)
+        api_row = api_data[0]
+        
+        # Query SQLite directly
+        db_row = self.db.query(Telemetry).filter(Telemetry.ap_id == "AP_CONSISTENT_01").first()
+        self.assertIsNotNone(db_row)
+        
+        # Assert field equality
+        self.assertEqual(api_row.ap_id, db_row.ap_id)
+        self.assertEqual(api_row.channel, db_row.channel)
+        self.assertEqual(api_row.rssi, db_row.rssi)
+        self.assertEqual(api_row.snr, db_row.snr)
+        self.assertEqual(api_row.noise_floor, db_row.noise_floor)
+        self.assertEqual(api_row.airtime_utilization, db_row.airtime_utilization)
+        self.assertEqual(api_row.retry_rate, db_row.retry_rate)
+        self.assertEqual(api_row.client_count, db_row.client_count)
+        self.assertEqual(api_row.qoe_score, db_row.qoe_score)
+        self.assertEqual(api_row.qoe_category, db_row.qoe_category)
+        self.assertEqual(api_row.interference_type, db_row.interference_type)
+        self.assertEqual(api_row.scenario_name, db_row.scenario_name)
+
 
 if __name__ == "__main__":
     print("Running integration tests...")
