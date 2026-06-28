@@ -19,9 +19,6 @@ from dotenv import load_dotenv
 
 from dashboard.causal_chain import (
     build_justification_text,
-    derive_root_cause,
-    derive_root_cause_ranked,
-    estimate_post_action_impact,
     format_root_cause_label,
     get_modulation,
     get_snr_label,
@@ -374,13 +371,19 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
 
     spectrum = parse_spectrum_snapshot(latest_row.get("spectrum_snapshot"))
 
-    ranked_causes = derive_root_cause_ranked(
-        rssi_dbm, snr_db, noise_dbm, retry_frac, airtime_frac, int_type, distance_m,
-        rec_root_cause=rc_from_rec,
-    )
-    dominant_cause = ranked_causes[0]
     if rc_from_rec and rc_from_rec not in ("NONE", "None", ""):
-        dominant_cause = {**dominant_cause, "conf": max(dominant_cause["conf"], confidence)}
+        dominant_cause = {
+            "label": rc_from_rec.replace("_", " ").title(),
+            "conf": confidence,
+            "reason": rec_reason or "Identified by diagnostic engine."
+        }
+    else:
+        dominant_cause = {
+            "label": "None (Healthy)",
+            "conf": 1.0,
+            "reason": "No anomalies or recommendations detected."
+        }
+    ranked_causes = [dominant_cause]
 
     # Removed estimate_post_action_impact
 
@@ -560,19 +563,22 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
         st.markdown(f"- ✓ Airtime is nominal")
         
     st.markdown("**Alternative Causes Considered:**")
-    for cause in ranked_causes[1:3]:
-        st.markdown(f"*{cause['label']}*")
-        if "Coverage" in cause['label']:
-            st.markdown(f"  - ✗ RSSI is stronger than -65 dBm" if rssi_dbm >= -65 else f"  - ✗ RSSI is adequate ({rssi_dbm:.1f} dBm)")
-            st.markdown(f"  - ✗ Excellent SNR ({snr_db:.1f} dB)" if snr_db >= 25 else "")
-            st.markdown(f"  - ✗ Coverage symptoms absent")
-        elif "Interference" in cause['label']:
-            st.markdown(f"  - ✗ Noise floor is clean ({noise_dbm:.1f} dBm)" if noise_dbm < -90 else "  - ✗ Symptoms align better with primary cause")
-        elif "Congestion" in cause['label']:
-            st.markdown(f"  - ✗ Airtime utilization only {airtime_pct}%" if airtime_pct < 75 else "  - ✗ Symptoms align better with primary cause")
-            st.markdown(f"  - ✗ Channel saturation not observed" if airtime_pct < 75 else "")
-        else:
-            st.markdown(f"  - ✗ Evidence does not strongly support this cause")
+    if len(ranked_causes) <= 1:
+        st.caption("No alternative causes were evaluated by the diagnostic engine.")
+    else:
+        for cause in ranked_causes[1:3]:
+            st.markdown(f"*{cause['label']}*")
+            if "Coverage" in cause['label']:
+                st.markdown(f"  - ✗ RSSI is stronger than -65 dBm" if rssi_dbm >= -65 else f"  - ✗ RSSI is adequate ({rssi_dbm:.1f} dBm)")
+                st.markdown(f"  - ✗ Excellent SNR ({snr_db:.1f} dB)" if snr_db >= 25 else "")
+                st.markdown(f"  - ✗ Coverage symptoms absent")
+            elif "Interference" in cause['label']:
+                st.markdown(f"  - ✗ Noise floor is clean ({noise_dbm:.1f} dBm)" if noise_dbm < -90 else "  - ✗ Symptoms align better with primary cause")
+            elif "Congestion" in cause['label']:
+                st.markdown(f"  - ✗ Airtime utilization only {airtime_pct}%" if airtime_pct < 75 else "  - ✗ Symptoms align better with primary cause")
+                st.markdown(f"  - ✗ Channel saturation not observed" if airtime_pct < 75 else "")
+            else:
+                st.markdown(f"  - ✗ Evidence does not strongly support this cause")
             
     st.divider()
 
@@ -691,9 +697,8 @@ def build_plain_text_report(latest_row: dict, top_rec: dict, ap_id: str) -> str:
         root_cause_label = rc_from_rec.replace("_", " ").title()
         root_conf = confidence
     else:
-        root_cause_label, root_conf = derive_root_cause(
-            rssi_dbm, snr_db, noise_dbm, retry_frac, airtime_frac, int_type, distance_m
-        )
+        root_cause_label = "None (Healthy)"
+        root_conf = 1.0
 
     snr_label_txt, _ = get_snr_label(snr_db)
     mod_scheme        = get_modulation(snr_db)
