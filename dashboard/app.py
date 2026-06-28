@@ -1087,6 +1087,43 @@ if ap_summaries and selected_ap:
                 st.markdown("**6 · Connected Client Density**")
                 st.bar_chart(df["client_count"])
 
+            st.markdown("---")
+            st.markdown("#### 📡 Additional Radio (Sensing & Spectrum)")
+            spectrum = parse_spectrum_snapshot(latest_row.get("spectrum_snapshot"))
+            if spectrum:
+                spec_data = spectrum.get("spectrum", {})
+                cq_score = spectrum.get("channel_quality_score", 0)
+                interferers = spectrum.get("detected_interferers", [])
+
+                sq1, sq2, sq3, sq4 = st.columns(4)
+                sq1.metric("Channel Quality Score", f"{cq_score:.1f}/100")
+                sq2.metric("Noise Floor", f"{spec_data.get('noise_floor_dbm', '-')} dBm")
+                sq3.metric("Peak Power", f"{spec_data.get('peak_power_dbm', '-')} dBm")
+                sq4.metric("Channel Busy Fraction", f"{(spec_data.get('channel_busy_fraction', 0) * 100):.1f}%")
+
+                st.markdown("**FFT Spectrum Sweep**")
+                bins = spec_data.get("bins", [])
+                if bins:
+                    df_bins = pd.DataFrame(bins)
+                    if "freq_mhz" in df_bins.columns and "power_dbm" in df_bins.columns:
+                        df_bins.set_index("freq_mhz", inplace=True)
+                        st.line_chart(df_bins["power_dbm"])
+                else:
+                    st.info("No FFT bin data available.")
+                    
+                if interferers:
+                    st.markdown("**Detected Interferers**")
+                    for inf in interferers:
+                        st.markdown(
+                            f"- **{inf.get('classification', 'Unknown')}**: "
+                            f"Center {inf.get('center_freq_mhz', '-')} MHz, "
+                            f"BW {inf.get('bandwidth_mhz', '-')} MHz, "
+                            f"Power {inf.get('power_dbm', '-')} dBm "
+                            f"(Conf: {inf.get('confidence', 0)*100:.0f}%)"
+                        )
+            else:
+                st.info("No sensing radio spectrum data available in the latest telemetry snapshot.")
+
         # ════════════════════════════════════════════════════════════════════
         # TAB 4 — Recommendations & Alerts (unchanged from original)
         # ════════════════════════════════════════════════════════════════════
