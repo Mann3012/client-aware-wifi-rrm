@@ -67,6 +67,12 @@ The prototype is **fully operational** as a Digital Twin simulator. It features:
 * **Root Cause Analysis Panel**: Dashboard panel showing the full causal chain from scenario → noise → SNR → retry → QoE → recommendation.
 * **Topology Visualization**: Displays AP and client positions on a scatter plot, updated per scenario transition.
 * **Statistical Change Detection Engine**: Uses EWMA to catch instant spikes in retry rates and airtime, and CUSUM to detect small persistent shifts in the noise floor.
+* **Sensing Radio & Additional Radio Panel**: Decodes real-time `spectrum_snapshot` payloads to render:
+  * **FFT Spectrum Sweep**: Live line chart showing frequency bins (MHz) vs power (dBm) to inspect spectral interference characteristics.
+  * **Channel Quality score**: A dynamic 0-100 metric calculated based on noise level, busy time, and active interferers.
+  * **Detected Interferers**: Real-time identification of non-WiFi (Bluetooth/Microwave) or overlapping neighbor AP interferers including center frequency, bandwidth, power, and confidence.
+* **Pure API Presentation Layer (Dashboard Refactor)**: Removed all physics equations (`compute_path_loss`, `estimate_post_action_impact`, and math formulas) from the dashboard layer to enforce clean UI separation.
+* **Single Immutable Snapshot & Scenario Locking**: Restructured rendering to query API endpoints exactly once per cycle and freeze the active scenario name globally, preventing rendering inconsistency across tabs when the background simulator ticks.
 * **Closed-Loop Policy Engine**: Evaluates active anomalies and telemetry values to issue RRM recommendations, applying channel changes back to the simulator.
 * **Interactive Streamlit Dashboard**: Renders live scorecards, multi-metric charts, scenario timeline, alert logs, and recommendation interface.
 * **Manual Scenario Selector**: Dropdown in the dashboard to instantly force any scenario on any AP — no waiting required.
