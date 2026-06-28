@@ -1092,6 +1092,14 @@ if ap_summaries and selected_ap:
                 st.markdown("**6 · Connected Client Density**")
                 st.bar_chart(df["client_count"])
 
+            st.markdown("**7 · Interference Activity History**")
+            if "interference_type" in df.columns:
+                df_int = df.copy()
+                df_int["Interference Active"] = df_int["interference_type"].apply(
+                    lambda x: 1.0 if x and x not in ("None", "NONE", "") else 0.0
+                )
+                st.line_chart(df_int["Interference Active"])
+
             st.markdown("---")
             st.markdown("#### 📡 Additional Radio (Sensing & Spectrum)")
             spectrum = parse_spectrum_snapshot(latest_row.get("spectrum_snapshot"))
