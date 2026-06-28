@@ -17,6 +17,19 @@ import streamlit as st
 from datetime import datetime
 from dotenv import load_dotenv
 
+from dashboard.causal_chain import (
+    build_justification_text,
+    derive_root_cause,
+    derive_root_cause_ranked,
+    estimate_post_action_impact,
+    format_root_cause_label,
+    get_modulation,
+    get_snr_label,
+    interference_matches,
+    normalize_interference_label,
+    parse_spectrum_snapshot,
+)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
 # ─────────────────────────────────────────────────────────────────────────────
@@ -226,290 +239,6 @@ def trigger_simulator_step() -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Causal Chain Physics Engine
-# All formulas directly mirror src/realistic_simulator/telemetry_simulator.py
-# ─────────────────────────────────────────────────────────────────────────────
-
-def compute_path_loss(distance_m, freq_mhz, wall_loss_db):
-    """
-    Log-Distance Indoor Path Loss (n=3) + wall attenuation.
-    Source: src/realistic_simulator/telemetry_simulator.py → calculate_path_loss()
-
-    PL(d0=1m) = 32.44 + 20·log10(0.001 km) + 20·log10(freq_MHz)
-    PL(d)     = PL(d0) + 10·3.0·log10(d / 1m) + wall_loss
-    """
-    if distance_m is None or freq_mhz is None:
-        return None
-    d     = max(1.0, float(distance_m))
-    pl_d0 = 32.44 + 20 * math.log10(0.001) + 20 * math.log10(float(freq_mhz))
-    pl_d  = pl_d0 + 10 * 3.0 * math.log10(d) + float(wall_loss_db or 0)
-    return round(pl_d, 1)
-
-
-def get_snr_label(snr):
-    """SNR quality tier per 802.11 standards."""
-    if snr is None:
-        return "Unknown", "b-bl"
-    if snr > 25:
-        return "Excellent  (> 25 dB)", "b-g"
-    if snr >= 20:
-        return "Good  (20 – 25 dB)", "b-g"
-    if snr >= 10:
-        return "Moderate  (10 – 20 dB)", "b-y"
-    return "Poor  (< 10 dB)", "b-r"
-
-
-def get_modulation(snr):
-    """Estimate 802.11 modulation from SNR."""
-    if snr is None:
-        return "Unknown"
-    if snr > 28:
-        return "1024-QAM / 256-QAM  (MCS 10–11)"
-    if snr > 22:
-        return "256-QAM  (MCS 8–9)"
-    if snr > 18:
-        return "64-QAM  (MCS 7)"
-    if snr > 13:
-        return "16-QAM  (MCS 4–5)"
-    if snr > 8:
-        return "QPSK  (MCS 2–3)"
-    return "BPSK  (MCS 0–1)"
-
-
-def derive_root_cause_ranked(rssi, snr, noise_floor, retry_rate, airtime_frac, int_type, distance_m):
-    """
-    Returns a ranked list of potential root causes with confidence scores.
-    """
-    causes = []
-    
-    if int_type and "Bluetooth" in int_type:
-        causes.append({"label": "Interference (Bluetooth)", "conf": 0.95, "reason": "Bursty non-WiFi interference detected; overlaps with Wi-Fi frames."})
-    elif int_type and "Microwave" in int_type:
-        causes.append({"label": "Interference (Microwave)", "conf": 0.95, "reason": "Broadband RF noise emission detected."})
-    elif int_type and "Neighbor" in int_type:
-        causes.append({"label": "Co-Channel Contention (Neighbor AP)", "conf": 0.92, "reason": "Neighbor AP traffic increases contention and airtime competition."})
-    elif int_type and int_type not in ("None", "none", ""):
-        causes.append({"label": f"Interference ({int_type})", "conf": 0.90, "reason": "Active non-WiFi interference detected."})
-    elif noise_floor is not None and noise_floor >= -90:
-        causes.append({"label": "Interference (Elevated Noise)", "conf": 0.85, "reason": "Elevated noise floor independent of client traffic."})
-    else:
-        causes.append({"label": "Interference", "conf": 0.15, "reason": "Noise floor is clean at the AP."})
-        
-    if rssi is not None and rssi < -78:
-        if distance_m is not None and distance_m > 20:
-            causes.append({"label": "Coverage (Distance + Path Loss)", "conf": 0.90, "reason": "Weak signal due to propagation distance and path loss."})
-        else:
-            causes.append({"label": "Coverage (Weak Signal)", "conf": 0.88, "reason": "Weak signal despite proximity (possible obstruction)."})
-    else:
-        causes.append({"label": "Coverage", "conf": 0.18, "reason": "RSSI remains strong, suggesting adequate signal propagation."})
-        
-    if airtime_frac is not None and airtime_frac > 0.75:
-        causes.append({"label": "Congestion (High Density)", "conf": 0.93, "reason": "Channel is heavily utilized by active traffic, causing medium contention."})
-    else:
-        causes.append({"label": "Congestion", "conf": 0.20, "reason": "Airtime utilization is nominal, indicating no channel saturation."})
-
-    causes.sort(key=lambda x: x["conf"], reverse=True)
-    
-    if causes[0]["conf"] < 0.50:
-        causes.insert(0, {"label": "System Optimal", "conf": 0.99, "reason": "All metrics are within healthy nominal parameters."})
-        
-    return causes
-
-
-def derive_root_cause(rssi, snr, noise_floor, retry_rate, airtime_frac, int_type, distance_m):
-    """
-    Heuristic root cause matching recommendation_engine.py decision rules.
-    Returns (cause_label, confidence_float).
-    """
-    if int_type and int_type not in ("None", "none", ""):
-        return f"Interference Issue ({int_type})", 0.95
-    if noise_floor is not None and noise_floor >= -90:
-        return "Interference Issue (Elevated Noise Floor)", 0.92
-    if rssi is not None and rssi < -78:
-        if distance_m is not None and distance_m > 20:
-            return "Coverage Issue (Distance + Path Loss)", 0.90
-        return "Coverage Issue (Weak Signal)", 0.88
-    if snr is not None and snr < 10:
-        return "Coverage / Noise Issue (Low SNR)", 0.87
-    if airtime_frac is not None and airtime_frac > 0.75:
-        return "Congestion Issue (High Airtime Utilization)", 0.85
-    if retry_rate is not None and retry_rate > 0.20:
-        return "Capacity Issue (High Retry Rate)", 0.82
-    if distance_m is not None and distance_m > 22:
-        return "Obstruction / Distance Issue", 0.80
-    return "System Optimal — No Dominant Issue", 1.0
-
-
-def build_justification_text(action, rssi, snr, noise_floor, distance_m,
-                              wall_count, retry_rate, qoe_score, int_type, airtime_frac):
-    """
-    Generates an engineer-grade narrative justification for the selected action.
-    Incorporates detailed wireless networking physics, SNR classifications,
-    interference types, network performance degradation effects, adaptive data rates,
-    and root cause reasoning with explicit rejection of competing causes.
-    """
-    # Format inputs safely
-    r_val = rssi if rssi is not None else -95.0
-    s_val = snr if snr is not None else 0.0
-    nf_val = noise_floor if noise_floor is not None else -95.0
-    d_val = distance_m if distance_m is not None else 1.0
-    w_count = wall_count if wall_count is not None else 0
-    w_loss = w_count * 3.0
-    ret_rate = retry_rate if retry_rate is not None else 0.0
-    qoe = qoe_score if qoe_score is not None else 0.0
-    airtime = airtime_frac if airtime_frac is not None else 0.0
-    interference = int_type if (int_type and int_type not in ("None", "")) else "None"
-
-    # 1. RSSI Explanation
-    rssi_explanation = (
-        f"The Received Signal Strength Indicator (RSSI) is measured at {r_val:.1f} dBm. "
-        f"In RF engineering, RSSI represents the received signal power in dBm, where values closer to 0 dBm indicate "
-        f"stronger signals. The RSSI is attenuated from the transmitter's power by Free Space Path Loss (FSPL) "
-        f"as RF energy spreads spherically over a propagation distance of {d_val:.1f} m, compounded by "
-        f"additional signal attenuation of {w_loss:.1f} dB introduced by {w_count} wall obstacles."
-    )
-
-    # 2. SNR & Noise Floor Calculation and Classification
-    snr_calc = f"SNR = RSSI - Noise Floor = {r_val:.1f} dBm - ({nf_val:.1f} dBm) = {s_val:.1f} dB."
-    
-    if s_val > 25:
-        snr_tier = "Excellent (>25 dB)"
-    elif s_val >= 20:
-        snr_tier = "Good (20–25 dB)"
-    elif s_val >= 10:
-        snr_tier = "Moderate (10–20 dB)"
-    else:
-        snr_tier = "Poor (<10 dB)"
-
-    snr_explanation = (
-        f"The resulting Signal-to-Noise Ratio (SNR) is {s_val:.1f} dB, which is classified as {snr_tier}. "
-        f"The Noise Floor represents the background RF energy and active interference. "
-        f"An elevated noise floor reduces the effective SNR even when the RSSI remains unchanged, "
-        f"which narrows the signal margins required for reliable decoding."
-    )
-
-    # 3. Adaptive Data Rates & Network Performance
-    performance_explanation = (
-        f"Under poor RF conditions, wireless devices dynamically reduce modulation and coding rates (MCS) "
-        f"using Adaptive Data Rates / Dynamic Rate Shifting (DRS) to maintain reliable delivery. "
-        f"While a strong SNR supports higher modulation efficiency (e.g., 256-QAM or 1024-QAM) and higher throughput, "
-        f"a weak SNR forces a fallback to lower modulation efficiency (e.g., QPSK or BPSK) for reliable delivery, "
-        f"resulting in lower throughput. At {s_val:.1f} dB SNR, retry rates rise to {ret_rate*100:.1f}%, increasing packet corruption, "
-        f"airtime consumption, and latency, which ultimately degrades the Quality of Experience (QoE) to {qoe:.1f}/10."
-    )
-
-    # 4. Root Cause Reasoning & Rejection of Competing Causes
-    if action == "POWER_INCREASE":
-        dominant_issue = "Coverage / Obstruction"
-        reasons = (
-            f"RSSI is degraded to {r_val:.1f} dBm due to propagation distance and wall attenuation. "
-            f"We reject Interference as a dominant cause because the noise floor remains stable at a clean baseline of {nf_val:.1f} dBm. "
-            f"We reject Congestion / Capacity because airtime utilization is nominal at {airtime*100:.1f}%, indicating no channel saturation."
-        )
-        recommendation_action_desc = "Increasing the AP transmit power compensates for path loss, raising the RSSI and restoring the SNR above 20 dB."
-    elif action == "CHANNEL_CHANGE":
-        dominant_issue = "Interference"
-        if interference == "MICROWAVE":
-            int_desc = "Non-WiFi interference from a Microwave oven burst"
-        elif interference == "BLUETOOTH":
-            int_desc = "Non-WiFi interference from a Bluetooth storm"
-        elif interference == "CO_CHANNEL_INTERFERENCE" or interference == "Neighbor AP":
-            int_desc = "Co-Channel Interference (CCI) from multiple APs sharing the same channel, increasing contention and airtime competition"
-        elif interference == "ADJACENT_CHANNEL":
-            int_desc = "Neighbor Channel Interference (NCI) from overlapping adjacent channel overlap"
-        else:
-            int_desc = f"interference ({interference})"
-
-        reasons = (
-            f"The dominant issue is {dominant_issue} caused by {int_desc}, raising the noise floor to {nf_val:.1f} dBm and reducing SNR. "
-            f"We reject Coverage / Obstruction because RSSI is strong at {r_val:.1f} dBm, meaning the physical signal propagation is adequate. "
-            f"We reject Congestion as the primary root cause because retry rates are driven by noise-induced corruption rather than pure channel contention."
-        )
-        recommendation_action_desc = "Migrating to a clean channel lowers the effective noise floor, recovering SNR and restoring modulation efficiency."
-    elif action == "LOAD_BALANCE":
-        dominant_issue = "Congestion"
-        reasons = (
-            f"The dominant issue is {dominant_issue} caused by high client density, which increases channel contention, collision probability, "
-            f"and retry rates while airtime utilization rises to {airtime*100:.1f}%. "
-            f"We reject Coverage / Obstruction because RSSI ({r_val:.1f} dBm) and SNR ({s_val:.1f} dB) are healthy. "
-            f"We reject Interference because the noise floor is clean at {nf_val:.1f} dBm."
-        )
-        recommendation_action_desc = "Steering excess clients to adjacent APs or other frequency bands reduces contention and airtime utilization."
-    elif action == "WIDTH_ADJUST":
-        dominant_issue = "Congestion / Capacity"
-        reasons = (
-            f"The dominant issue is {dominant_issue}. Operating on a wide channel increases collision probability and capture of adjacent noise. "
-            f"We reject pure Coverage issues because the RSSI of {r_val:.1f} dBm is acceptable."
-        )
-        recommendation_action_desc = "Narrowing the channel width reduces the noise integration bandwidth, improving SNR margin and link stability under congestion."
-    elif action == "POWER_DECREASE":
-        dominant_issue = "Capacity"
-        reasons = (
-            f"The dominant issue is overlapping cell coverage causing excessive co-channel overlap. "
-            f"We reject Coverage because RSSI is strong at {r_val:.1f} dBm. We reject external interference as the background noise floor is stable."
-        )
-        recommendation_action_desc = "Reducing TX power shrinks the cell boundary, reducing co-channel interference and improving overall spectral reuse."
-    else:
-        dominant_issue = "System Optimal"
-        reasons = (
-            f"RSSI ({r_val:.1f} dBm), Noise Floor ({nf_val:.1f} dBm), SNR ({s_val:.1f} dB), and airtime utilization ({airtime*100:.1f}%) "
-            f"are all within healthy nominal parameters."
-        )
-        recommendation_action_desc = "No corrective RRM actions are required at this time."
-
-    root_cause_explanation = (
-        f"ROOT CAUSE DETERMINATION:\n"
-        f"Dominant Issue identified: **{dominant_issue}**\n"
-        f"Causal Reasoning: {reasons}\n"
-        f"RRM Action Justification: {recommendation_action_desc}"
-    )
-
-    # Combine into unified senior wireless engineer troubleshooting log
-    report = (
-        f"ENGINEERING TROUBLESHOOTING NOTES:\n\n"
-        f"• Propagation & Path Loss:\n{rssi_explanation}\n\n"
-        f"• RF Signal Quality:\n{snr_calc}\n{snr_explanation}\n\n"
-        f"• Adaptive Data Rates & Network Impact:\n{performance_explanation}\n\n"
-        f"• Causal Diagnostics:\n{root_cause_explanation}"
-    )
-    return report
-
-
-def estimate_post_action_impact(action, rssi, snr, qoe, retry_rate):
-    """
-    Predicts approximate metric improvements after the recommended action.
-    Delta values are conservative engineering estimates per action type.
-    """
-    deltas = {
-        "CHANNEL_CHANGE":  dict(rssi= 1, snr=10, qoe=2.5, retry=-0.20),
-        "POWER_INCREASE":  dict(rssi= 6, snr= 6, qoe=1.8, retry=-0.12),
-        "POWER_DECREASE":  dict(rssi=-4, snr= 5, qoe=1.2, retry=-0.10),
-        "WIDTH_ADJUST":    dict(rssi= 0, snr= 4, qoe=1.0, retry=-0.08),
-        "LOAD_BALANCE":    dict(rssi= 0, snr= 3, qoe=1.5, retry=-0.10),
-        "NONE":            dict(rssi= 0, snr= 0, qoe=0.0, retry= 0.00),
-    }.get(action, dict(rssi=0, snr=0, qoe=0, retry=0))
-
-    def safe_add(v, delta, mn=None, mx=None):
-        if v is None:
-            return None
-        r = round(v + delta, 2)
-        if mn is not None: r = max(mn, r)
-        if mx is not None: r = min(mx, r)
-        return r
-
-    return {
-        "rssi_before":  rssi,
-        "rssi_after":   safe_add(rssi,       deltas["rssi"]),
-        "snr_before":   snr,
-        "snr_after":    safe_add(snr,        deltas["snr"], mn=0),
-        "qoe_before":   qoe,
-        "qoe_after":    safe_add(qoe,        deltas["qoe"], mx=10),
-        "retry_before": retry_rate,
-        "retry_after":  safe_add(retry_rate, deltas["retry"], mn=0, mx=1),
-    }
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # HTML Color Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 def _cv(v, decimals=1, suffix="", fallback="—"):
@@ -550,8 +279,8 @@ def _airtime_cls(pct):
 
 def _qoe_cls(v):
     if v is None: return "mv"
-    if v >= 7:    return "mv mv-g"
-    if v >= 4:    return "mv mv-y"
+    if v >= 85:   return "mv mv-g"
+    if v >= 65:   return "mv mv-y"
     return "mv mv-r"
 
 def _dist_cls(v):
@@ -595,433 +324,7 @@ def _conf_color(c):
 # Main Causal Chain HTML Renderer
 # ─────────────────────────────────────────────────────────────────────────────
 def render_causal_chain_html(latest_row: dict, top_rec: dict, ap_id: str) -> str:
-    """
-    Builds the full 8-layer causal chain HTML report.
-
-    Layer order (mirrors the causal physics pipeline in telemetry_simulator.py):
-      ① Environment Factors
-      ② Propagation Analysis
-      ③ RF Signal Quality
-      ④ Network Impact
-      ⑤ User Experience (QoE)
-      ⑥ Root Cause Detection
-      ⑦ Recommendation Justification
-      ⑧ Predicted Impact
-    """
-
-    # ── Extract all telemetry fields ─────────────────────────────────────────
-    distance_m   = latest_row.get("distance")
-    max_dist_m   = latest_row.get("max_distance")
-    closest_m    = latest_row.get("closest_client")
-    wall_count   = latest_row.get("wall_count")
-    wall_loss_db = latest_row.get("wall_loss")
-    freq_mhz     = latest_row.get("freq_mhz")    or 5180.0
-    tx_power_dbm = latest_row.get("tx_power")    or 20.0
-    airtime_frac = latest_row.get("airtime_utilization")  # 0.0–1.0
-    int_type     = latest_row.get("interference_type") or "None"
-    client_count = latest_row.get("client_count")
-    channel      = latest_row.get("channel")
-    scenario_nm  = latest_row.get("scenario_name", "Unknown")
-
-    rssi_dbm     = latest_row.get("rssi")
-    noise_dbm    = latest_row.get("noise_floor")
-    snr_db       = latest_row.get("snr")
-    retry_frac   = latest_row.get("retry_rate")   # 0.0–1.0
-    qoe_score    = latest_row.get("qoe_score")
-    qoe_cat      = latest_row.get("qoe_category") or "—"
-
-    # ── Recommendation fields ─────────────────────────────────────────────────
-    action       = (top_rec.get("action")       or "NONE") if top_rec else "NONE"
-    confidence   = (top_rec.get("confidence")   or 0.80)   if top_rec else 0.80
-    rc_from_rec  = (top_rec.get("root_cause")   or "")     if top_rec else ""
-    exp_gain     = (top_rec.get("expected_qoe_gain") or 0) if top_rec else 0
-    cur_val      = (top_rec.get("current_value")     or "—") if top_rec else "—"
-    rec_val      = (top_rec.get("recommended_value") or "—") if top_rec else "—"
-    rec_reason   = (top_rec.get("reason")        or "")    if top_rec else ""
-
-    # ── Derived values ────────────────────────────────────────────────────────
-    path_loss_db  = compute_path_loss(distance_m, freq_mhz, wall_loss_db)
-    est_rx_pwr    = (round(tx_power_dbm - path_loss_db, 1)
-                     if path_loss_db is not None else None)
-
-    # SNR formula string  (formula from telemetry_simulator.py → calculate_snr)
-    if rssi_dbm is not None and noise_dbm is not None:
-        snr_formula = (f"{rssi_dbm:.1f} &minus; ({noise_dbm:.1f}) "
-                       f"= <strong>{snr_db:.1f} dB</strong>")
-    else:
-        snr_formula = "Insufficient data"
-
-    snr_label, snr_badge_cls = get_snr_label(snr_db)
-    mod_scheme  = get_modulation(snr_db)
-
-    # Percentage versions of fraction metrics
-    retry_pct     = round(retry_frac * 100,  1) if retry_frac  is not None else None
-    airtime_pct   = round(airtime_frac * 100, 1) if airtime_frac is not None else None
-
-    # Heuristic estimates
-    pkt_loss_pct  = round(retry_pct * 0.70, 1) if retry_pct is not None else None
-    thput_deg_pct = round(retry_pct * 1.50, 1) if retry_pct is not None else None
-    latency_ms    = round(retry_pct * 1.20, 0) if retry_pct is not None else None
-
-    # Root cause
-    if rc_from_rec and rc_from_rec not in ("NONE", "None", ""):
-        root_cause_label = rc_from_rec.replace("_", " ").title()
-        root_conf = confidence
-    else:
-        root_cause_label, root_conf = derive_root_cause(
-            rssi_dbm, snr_db, noise_dbm, retry_frac, airtime_frac, int_type, distance_m
-        )
-
-    conf_pct = int(root_conf * 100)
-    conf_col = _conf_color(root_conf)
-
-    # Justification paragraph
-    justification = build_justification_text(
-        action, rssi_dbm, snr_db, noise_dbm, distance_m,
-        wall_count, retry_frac, qoe_score, int_type, airtime_frac
-    )
-
-    # Post-action impact predictions
-    impact = estimate_post_action_impact(action, rssi_dbm, snr_db, qoe_score, retry_frac)
-
-    if action == "NONE":
-        impact_html = "<p style='color:#64748B;font-size:0.86rem;margin:0;'>System is already operating optimally — no action needed.</p>"
-    else:
-        impact_html = f"""
-    <div class="irow">
-      <span class="mk">RSSI</span>
-      <span>
-        <span class="mv">{_cv(impact['rssi_before'], 1, ' dBm')}</span>
-        &nbsp;&rarr;&nbsp;
-        <span class="mv mv-g">{_cv(impact['rssi_after'], 1, ' dBm')}</span>
-        {_delta_html(impact['rssi_before'], impact['rssi_after'], ' dBm', higher_is_better=True)}
-      </span>
-    </div>
-    <div class="irow">
-      <span class="mk">SNR</span>
-      <span>
-        <span class="mv">{_cv(impact['snr_before'], 1, ' dB')}</span>
-        &nbsp;&rarr;&nbsp;
-        <span class="mv mv-g">{_cv(impact['snr_after'], 1, ' dB')}</span>
-        {_delta_html(impact['snr_before'], impact['snr_after'], ' dB', higher_is_better=True)}
-      </span>
-    </div>
-    <div class="irow">
-      <span class="mk">QoE Score</span>
-      <span>
-        <span class="mv">{_cv(impact['qoe_before'], 1, ' / 100')}</span>
-        &nbsp;&rarr;&nbsp;
-        <span class="mv mv-g">{_cv(impact['qoe_after'], 1, ' / 100')}</span>
-        {_delta_html(impact['qoe_before'], impact['qoe_after'], ' pts', higher_is_better=True)}
-      </span>
-    </div>
-    <div class="irow">
-      <span class="mk">Retry Rate</span>
-      <span>
-        <span class="mv">{_cv((impact['retry_before'] or 0)*100, 1, ' %')}</span>
-        &nbsp;&rarr;&nbsp;
-        <span class="mv mv-g">{_cv((impact['retry_after'] or 0)*100, 1, ' %')}</span>
-        {_delta_html(impact['retry_before'], impact['retry_after'], ' pts', higher_is_better=False)}
-      </span>
-    </div>
-    """
-
-    # Timestamp
-    now_ts = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
-
-    # ── Interference display ──────────────────────────────────────────────────
-    int_clean     = int_type not in ("None", "none", "", None)
-    int_cls       = "mv mv-r" if int_clean else "mv mv-g"
-    int_display   = int_type if int_clean else "None — Clean RF Environment"
-
-    # ── Wall display ──────────────────────────────────────────────────────────
-    wc_display = wall_count if wall_count is not None else "—"
-    wl_display = _cv(wall_loss_db, 1, " dB")
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Assemble HTML
-    # ─────────────────────────────────────────────────────────────────────────
-    html = f"""
-<div class="cc-wrap">
-
-  <!-- ══ REPORT HEADER ══ -->
-  <div class="cc-header">
-    <div class="cc-header-title">🔗 &nbsp; Causal Metric Chain &mdash; Engineering Report</div>
-    <div class="cc-header-meta">
-      AP: <strong>{ap_id}</strong> &nbsp;|&nbsp;
-      Scenario: <em>{scenario_nm}</em> &nbsp;|&nbsp;
-      Channel: {channel or "—"} &nbsp;|&nbsp;
-      Action: <strong>{action}</strong> &nbsp;|&nbsp;
-      Generated: {now_ts}
-    </div>
-  </div>
-
-  <div class="cc-body">
-
-  <!-- ══════════════════════════════════════════ -->
-  <!-- LAYER ① — Environment Factors             -->
-  <!-- ══════════════════════════════════════════ -->
-  <div class="cc-section cc-env">
-    <div class="cc-sec-title" style="color:#1D4ED8;">
-      ① &nbsp; 🌍 &nbsp; Environment Factors
-    </div>
-
-    {_mrow("Client Distance (average)",
-           f'<span class="{_dist_cls(distance_m)}">{_cv(distance_m, 1, " m")}</span>')}
-
-    {_mrow("Client Distance (closest / furthest)",
-           f'<span class="mv">{_cv(closest_m, 1, " m")} &nbsp;/&nbsp; {_cv(max_dist_m, 1, " m")}</span>')}
-
-    {_mrow("Walls / Obstacles",
-           f'<span class="mv">{wc_display} wall(s)</span>'
-           f'&nbsp;<span class="mv mv-y">&rarr; {wl_display} total attenuation</span>')}
-
-    {_mrow("Interference Source",
-           f'<span class="{int_cls}">{int_display}</span>')}
-
-    {_mrow("Channel Utilization (Airtime)",
-           f'<span class="{_airtime_cls(airtime_pct)}">{_cv(airtime_pct, 1, " %")}</span>')}
-
-    {_mrow("Connected Clients",
-           f'<span class="mv">{client_count if client_count is not None else "—"}</span>')}
-
-    {_mrow("Operating Frequency",
-           f'<span class="mv">{_cv(freq_mhz, 0, " MHz")}</span>')}
-
-    {_mrow("AP Transmit Power",
-           f'<span class="mv">{_cv(tx_power_dbm, 0, " dBm")}</span>')}
-  </div>
-
-  {_arrow("client distance + walls + interference → path loss")}
-
-  <!-- ══════════════════════════════════════════ -->
-  <!-- LAYER ② — Propagation Analysis            -->
-  <!-- ══════════════════════════════════════════ -->
-  <div class="cc-section cc-prop">
-    <div class="cc-sec-title" style="color:#7C3AED;">
-      ② &nbsp; 📡 &nbsp; Propagation Analysis
-    </div>
-
-    {_mrow("Path Loss Model",
-           '<span class="mv">Log-Distance Indoor (path-loss exponent n = 3.0)</span>')}
-
-    {_mrow("Reference loss PL(d₀ = 1 m)",
-           f'<span class="mv">'
-           f'{round(32.44 + 20*math.log10(0.001) + 20*math.log10(float(freq_mhz)), 1) if freq_mhz else "—"}'
-           f' dB</span>')}
-
-    {_mrow("Wall Attenuation  (3.0 dB / wall)",
-           f'<span class="mv mv-y">{wl_display}'
-           f'  ({wc_display} × 3.0 dB)</span>')}
-
-    {_mrow("Total Computed Path Loss",
-           f'<span class="{_pl_cls(path_loss_db)}">{_cv(path_loss_db, 1, " dB")}</span>')}
-
-    {_mrow("Estimated Received Power  (TX − PL)",
-           f'<span class="{_rssi_cls(est_rx_pwr)}">{_cv(est_rx_pwr, 1, " dBm")}</span>')}
-
-    <div class="fbox">
-      PL(d₀=1m) = 32.44 + 20&middot;log&#8321;&#8320;(0.001&nbsp;km)
-                  + 20&middot;log&#8321;&#8320;({_cv(freq_mhz, 0)}&nbsp;MHz)
-      <br>
-      PL(d)     = PL(d₀) + 10 &times; 3.0 &times; log&#8321;&#8320;({_cv(distance_m, 1)}m / 1m)
-                  + {wl_display} wall loss
-                  = <strong>{_cv(path_loss_db, 1, " dB")}</strong>
-      <br>
-      Received   = TX ({_cv(tx_power_dbm, 0, " dBm")})
-                   &minus; PL ({_cv(path_loss_db, 1, " dB")})
-                   = <strong>{_cv(est_rx_pwr, 1, " dBm")}</strong>
-    </div>
-  </div>
-
-  {_arrow("path loss reduces received signal → RSSI degradation")}
-
-  <!-- ══════════════════════════════════════════ -->
-  <!-- LAYER ③ — RF Signal Quality               -->
-  <!-- ══════════════════════════════════════════ -->
-  <div class="cc-section cc-rf">
-    <div class="cc-sec-title" style="color:#0891B2;">
-      ③ &nbsp; 📶 &nbsp; RF Signal Quality
-    </div>
-
-    {_mrow("RSSI  (avg over all clients)",
-           f'<span class="{_rssi_cls(rssi_dbm)}">{_cv(rssi_dbm, 1, " dBm")}</span>'
-           f'&nbsp;<span class="badge {"b-g" if rssi_dbm and rssi_dbm >= -65 else "b-y" if rssi_dbm and rssi_dbm >= -78 else "b-r"}">'
-           f'{"Good" if rssi_dbm and rssi_dbm >= -65 else "Weak" if rssi_dbm and rssi_dbm >= -78 else "Critical"}</span>')}
-
-    {_mrow("Noise Floor",
-           f'<span class="{_noise_cls(noise_dbm)}">{_cv(noise_dbm, 1, " dBm")}</span>'
-           f'&nbsp;<span class="badge {"b-g" if noise_dbm and noise_dbm < -90 else "b-y" if noise_dbm and noise_dbm < -80 else "b-r"}">'
-           f'{"Clean" if noise_dbm and noise_dbm < -90 else "Elevated" if noise_dbm and noise_dbm < -80 else "High"}</span>')}
-
-    <div class="fbox">
-      <strong>SNR = RSSI &minus; Noise Floor</strong>
-      &nbsp;&nbsp;=&nbsp;&nbsp; {snr_formula}
-    </div>
-
-    {_mrow("SNR",
-           f'<span class="{_snr_cls(snr_db)}">{_cv(snr_db, 1, " dB")}</span>'
-           f'&nbsp;<span class="{snr_badge_cls} badge">{snr_label}</span>')}
-
-    <div style="margin-top:0.45rem;font-size:0.76rem;color:#64748B;display:flex;gap:0.35rem;flex-wrap:wrap;">
-      SNR quality bands: &nbsp;
-      <span class="badge b-g">&gt; 25 dB &rarr; Excellent</span>
-      <span class="badge b-g">20&ndash;25 dB &rarr; Good</span>
-      <span class="badge b-y">10&ndash;20 dB &rarr; Moderate</span>
-      <span class="badge b-r">&lt; 10 dB &rarr; Poor</span>
-    </div>
-  </div>
-
-  {_arrow("SNR determines modulation, retry rate, and throughput")}
-
-  <!-- ══════════════════════════════════════════ -->
-  <!-- LAYER ④ — Network Impact                  -->
-  <!-- ══════════════════════════════════════════ -->
-  <div class="cc-section cc-net">
-    <div class="cc-sec-title" style="color:#D97706;">
-      ④ &nbsp; 🔁 &nbsp; Network Impact
-    </div>
-
-    {_mrow("Retry Rate",
-           f'<span class="{_retry_cls(retry_pct)}">{_cv(retry_pct, 1, " %")}</span>'
-           f'&nbsp;<span class="badge {"b-g" if retry_pct and retry_pct < 10 else "b-y" if retry_pct and retry_pct < 20 else "b-r"}">'
-           f'{"Healthy" if retry_pct and retry_pct < 10 else "Warning" if retry_pct and retry_pct < 20 else "Critical"}</span>')}
-
-    {_mrow("Packet Loss  (estimated, ≈ 70 % of retries → unique drops)",
-           f'<span class="mv mv-y">{_cv(pkt_loss_pct, 1, " %")}</span>')}
-
-    {_mrow("Modulation Efficiency  (derived from SNR)",
-           f'<span class="{_snr_cls(snr_db)}">{mod_scheme}</span>')}
-
-    {_mrow("Airtime Utilization  (spectrum occupancy)",
-           f'<span class="{_airtime_cls(airtime_pct)}">{_cv(airtime_pct, 1, " %")}</span>')}
-
-    {_mrow("Retransmission Airtime Overhead",
-           f'<span class="mv mv-y">'
-           f'≈ {_cv(retry_pct, 1, " %")} of channel capacity wasted on retries'
-           f'</span>')}
-
-    <div class="fbox">
-      Retry formula (simulator):
-      combined_retry = 1 &minus; (1 &minus; retry_SNR) &times; (1 &minus; retry_congestion)
-      <br>
-      retry_SNR = min(80%, 100% &times; e<sup>&minus;0.12 &times; SNR</sup>)
-      &nbsp;&nbsp;&rarr;&nbsp;&nbsp; at SNR = {_cv(snr_db, 1, " dB")},
-      retry_SNR &asymp; {_cv(min(80.0, max(1.0, 100.0 * math.exp(-0.12 * float(snr_db)))) if snr_db else None, 1, " %")}
-    </div>
-  </div>
-
-  {_arrow("retransmissions and congestion reduce throughput and increase latency")}
-
-  <!-- ══════════════════════════════════════════ -->
-  <!-- LAYER ⑤ — User Experience / QoE           -->
-  <!-- ══════════════════════════════════════════ -->
-  <div class="cc-section cc-qoe">
-    <div class="cc-sec-title" style="color:#DB2777;">
-      ⑤ &nbsp; 👤 &nbsp; User Experience Impact  (QoE)
-    </div>
-
-    {_mrow("Estimated Throughput Degradation  (≈ 1.5× retry %)",
-           f'<span class="mv mv-y">~{_cv(thput_deg_pct, 1, " %")}</span>')}
-
-    {_mrow("Estimated Latency Increase  (≈ 1.2 ms per % retry)",
-           f'<span class="mv mv-y">~{_cv(latency_ms, 0, " ms")}</span>')}
-
-    {_mrow("QoE Score",
-           f'<span class="{_qoe_cls(qoe_score)}">{_cv(qoe_score, 1, " / 100")}</span>')}
-
-    {_mrow("QoE Category",
-           f'<span class="{_qoe_cls(qoe_score)}">{qoe_cat}</span>')}
-
-    <div class="fbox">
-      QoE formula (simulator): &nbsp;
-      QoE = 0.40 &times; SNR_score &nbsp;+&nbsp; 0.30 &times; Retry_score
-            &nbsp;+&nbsp; 0.20 &times; Noise_score &nbsp;+&nbsp; 0.10 &times; Load_score
-      <br>
-      SNR_score = min(100, (SNR / 35) &times; 100) &nbsp;&nbsp;&rarr;&nbsp;&nbsp;
-      {_cv(min(100, (snr_db / 35) * 100) if snr_db else None, 1)}
-    </div>
-  </div>
-
-  {_arrow("QoE degradation triggers root cause analysis")}
-
-  <!-- ══════════════════════════════════════════ -->
-  <!-- LAYER ⑥ — Root Cause Detection            -->
-  <!-- ══════════════════════════════════════════ -->
-  <div class="cc-section cc-root">
-    <div class="cc-sec-title" style="color:#DC2626;">
-      ⑥ &nbsp; 🔍 &nbsp; Root Cause Detection
-    </div>
-
-    <div style="margin-bottom:0.6rem;">
-      <span style="color:#64748B;font-size:0.83rem;font-weight:500;">Dominant Root Cause:</span>
-      <br>
-      <span class="rc-pill" style="margin-top:0.3rem;display:inline-block;">
-        {root_cause_label}
-      </span>
-    </div>
-
-    <div style="font-size:0.82rem;color:#64748B;margin-bottom:0.3rem;">
-      Detection Confidence:
-      <strong style="color:#0F172A;font-size:0.95rem;">&nbsp;{conf_pct}%</strong>
-    </div>
-    <div class="conf-track">
-      <div class="conf-fill" style="width:{conf_pct}%;background:{conf_col};"></div>
-    </div>
-
-    <div style="margin-top:0.6rem;font-size:0.8rem;color:#64748B;">
-      Root cause categories:
-      &nbsp;<span class="badge b-r">Coverage Issue</span>
-      &nbsp;<span class="badge b-r">Interference Issue</span>
-      &nbsp;<span class="badge b-y">Congestion Issue</span>
-      &nbsp;<span class="badge b-y">Capacity Issue</span>
-      &nbsp;<span class="badge b-y">Obstruction Issue</span>
-      &nbsp;<span class="badge b-g">System Optimal</span>
-    </div>
-  </div>
-
-  {_arrow("root cause determines the optimal RRM action")}
-
-  <!-- ══════════════════════════════════════════ -->
-  <!-- LAYER ⑦ — Recommendation Justification    -->
-  <!-- ══════════════════════════════════════════ -->
-  <div class="cc-section cc-rec">
-    <div class="cc-sec-title" style="color:#16A34A;">
-      ⑦ &nbsp; ⚡ &nbsp; Recommendation Justification
-    </div>
-
-    {_mrow("Selected RRM Action",
-           f'<span class="mv" style="color:#059669;font-size:0.95rem;font-weight:800;">{action}</span>')}
-
-    {_mrow("Current Setting → Recommended Setting",
-           f'<span class="mv">{cur_val}</span>'
-           f'&nbsp;<span style="color:#64748B;">&rarr;</span>&nbsp;'
-           f'<span class="mv mv-g">{rec_val}</span>')}
-
-    {_mrow("Decision Confidence",
-           f'<span class="mv mv-g">{int(confidence*100)} %</span>')}
-
-    {_mrow("Expected QoE Gain",
-           f'<span class="mv mv-g">+ {_cv(exp_gain, 1, " pts")}</span>')}
-
-    <div class="jbox" style="text-align: left; font-family: sans-serif; white-space: pre-wrap; font-style: normal; color: #1E293B; background: #F8FAFC; border: 1px solid #CBD5E1; padding: 1rem; border-radius: 8px;">{justification}</div>
-  </div>
-
-  <!-- ══════════════════════════════════════════ -->
-  <!-- LAYER ⑧ — Predicted Post-Action Impact    -->
-  <!-- ══════════════════════════════════════════ -->
-  <div class="cc-section cc-impact">
-    <div class="cc-sec-title" style="color:#059669;">
-      ⑧ &nbsp; 📈 &nbsp; Predicted Impact  (if Recommendation Applied)
-    </div>
-
-    {impact_html}
-  </div>
-
-  </div><!-- /cc-body -->
-</div><!-- /cc-wrap -->
-"""
-    return html
+    return ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1055,22 +358,31 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
     exp_gain     = (top_rec.get("expected_qoe_gain") or 0) if top_rec else 0
     cur_val      = (top_rec.get("current_value")     or "—") if top_rec else "—"
     rec_val      = (top_rec.get("recommended_value") or "—") if top_rec else "—"
-    
-    path_loss_db = compute_path_loss(distance_m, freq_mhz, wall_loss_db)
-    est_rx_pwr   = (round(tx_power_dbm - path_loss_db, 1) if path_loss_db is not None else None)
+    rc_from_rec  = (top_rec.get("root_cause")   or "")     if top_rec else ""
+    rec_reason   = (top_rec.get("reason")        or "")    if top_rec else ""
+
+    path_loss_db = None
+    est_rx_pwr   = None
     snr_label, _ = get_snr_label(snr_db)
     mod_scheme   = get_modulation(snr_db)
-    
+
     retry_pct    = round((retry_frac or 0) * 100, 1)
     airtime_pct  = round((airtime_frac or 0) * 100, 1)
     pkt_loss_pct = round(retry_pct * 0.70, 1)
     thput_deg_pct= round(retry_pct * 1.50, 1)
     latency_ms   = round(retry_pct * 1.20, 0)
-    
-    ranked_causes = derive_root_cause_ranked(rssi_dbm, snr_db, noise_dbm, retry_frac, airtime_frac, int_type, distance_m)
+
+    spectrum = parse_spectrum_snapshot(latest_row.get("spectrum_snapshot"))
+
+    ranked_causes = derive_root_cause_ranked(
+        rssi_dbm, snr_db, noise_dbm, retry_frac, airtime_frac, int_type, distance_m,
+        rec_root_cause=rc_from_rec,
+    )
     dominant_cause = ranked_causes[0]
-    
-    impact = estimate_post_action_impact(action, rssi_dbm, snr_db, qoe_score, retry_frac)
+    if rc_from_rec and rc_from_rec not in ("NONE", "None", ""):
+        dominant_cause = {**dominant_cause, "conf": max(dominant_cause["conf"], confidence)}
+
+    # Removed estimate_post_action_impact
 
     # SEC 0: Executive Summary
     st.subheader("SECTION 0: EXECUTIVE SUMMARY")
@@ -1112,8 +424,25 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Avg Distance", f"{distance_m:.1f} m" if distance_m else "—")
     c2.metric("Walls", f"{wall_count}" if wall_count is not None else "—")
-    c3.metric("Interference", int_type if int_type and int_type != "None" else "None")
+    c3.metric("Interference", normalize_interference_label(int_type))
     c4.metric("Airtime Utilization", f"{airtime_pct}%")
+
+    if spectrum:
+        st.markdown("#### Sensing Radio — Spectrum Snapshot")
+        sc1, sc2, sc3, sc4 = st.columns(4)
+        spec = spectrum.get("spectrum", {})
+        sc1.metric("Channel Quality", f"{spectrum.get('channel_quality_score', '—')}/100")
+        sc2.metric("Spectrum Noise Floor", f"{spec.get('noise_floor_dbm', '—')} dBm")
+        sc3.metric("Peak Power", f"{spec.get('peak_power_dbm', '—')} dBm")
+        sc4.metric("Channel Busy", f"{(spec.get('channel_busy_fraction', 0) or 0) * 100:.1f}%")
+        interferers = spectrum.get("detected_interferers") or []
+        if interferers:
+            st.markdown("**Detected Interferers (Sensing Radio):**")
+            for inf in interferers[:5]:
+                st.markdown(
+                    f"- `{inf.get('classification', 'unknown')}` @ {inf.get('center_freq_mhz', '—')} MHz "
+                    f"({inf.get('power_dbm', '—')} dBm, duty {((inf.get('duty_cycle') or 0) * 100):.0f}%)"
+                )
     
     env_reasoning = f"The environment contains {client_count or 'some'} clients with an average distance of {distance_m:.1f} meters. "
     if wall_count:
@@ -1121,7 +450,7 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
     else:
         env_reasoning += f"Wall attenuation is minimal. "
     if int_type and int_type != "None":
-        env_reasoning += f"{int_type} interference is actively present in the environment. "
+        env_reasoning += f"{normalize_interference_label(int_type)} interference is actively present in the environment. "
     if airtime_pct > 70:
         env_reasoning += "Channel utilization is severely elevated, limiting available airtime for data transmission."
     else:
@@ -1131,18 +460,17 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
 
     # SEC 2: Propagation Analysis
     st.subheader("SECTION 2: PROPAGATION ANALYSIS")
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Transmit Power", f"{tx_power_dbm:.0f} dBm")
-    c2.metric("Path Loss", f"{path_loss_db:.1f} dB" if path_loss_db else "—")
-    c3.metric("Estimated RSSI", f"{est_rx_pwr:.1f} dBm" if est_rx_pwr else "—")
-    
-    prop_reasoning = f"The signal originates at {tx_power_dbm:.0f} dBm. Over the distance of {distance_m:.1f} meters, Free Space Path Loss and obstacles contribute to {path_loss_db:.1f} dB of total signal attenuation. "
-    if est_rx_pwr and est_rx_pwr >= -65:
-        prop_reasoning += "The resulting signal level at the receiver is excellent, providing a solid foundation for high-speed modulation."
-    elif est_rx_pwr and est_rx_pwr >= -78:
-        prop_reasoning += "The resulting signal level is adequate, though margins are reduced against unexpected noise spikes."
-    else:
-        prop_reasoning += "The heavy signal attenuation results in a weak received signal, directly impacting communication reliability."
+    c2.metric("Path Loss (est.)", f"{path_loss_db:.1f} dB" if path_loss_db else "—")
+    c3.metric("Measured RSSI", f"{rssi_dbm:.1f} dBm" if rssi_dbm else "—")
+    c4.metric("Model RSSI (TX−PL)", f"{est_rx_pwr:.1f} dBm" if est_rx_pwr else "—")
+
+    prop_reasoning = (
+        f"The signal originates at {tx_power_dbm:.0f} dBm. Path loss over {distance_m:.1f} m is estimated at "
+        f"{path_loss_db:.1f} dB (model). The **measured RSSI** from telemetry is {rssi_dbm:.1f} dBm — this is the "
+        f"authoritative value used for SNR and QoE calculations in the simulator."
+    )
     st.markdown(prop_reasoning)
     st.divider()
 
@@ -1167,9 +495,9 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
     # SEC 4: Network Impact
     st.subheader("SECTION 4: NETWORK IMPACT")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Retry Rate", f"{retry_pct}%")
+    c1.metric("Packet Error Rate (PER)", f"{retry_pct}%")
     c2.metric("Packet Loss (Est)", f"{pkt_loss_pct}%")
-    c3.metric("Airtime Overhed", f"~{retry_pct}%")
+    c3.metric("Airtime Utilization", f"{airtime_pct}%")
     c4.metric("Modulation Efficiency", mod_scheme)
     
     if "Bluetooth" in dominant_cause["label"] or "Microwave" in dominant_cause["label"]:
@@ -1277,28 +605,18 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
 
     # SEC 8: Predicted Improvement
     st.subheader("SECTION 8: PREDICTED IMPROVEMENT")
-    st.markdown("*(Based on simulator models and current network conditions)*")
+    st.markdown("*(Uses recommendation engine expected_qoe_gain when available)*")
     if action == "NONE":
         st.info("System is operating optimally. No metric changes predicted.")
     else:
+        qoe_after = min(100.0, (qoe_score or 0) + exp_gain)
         df_impact = pd.DataFrame([
-            {"Metric": "RSSI", "Current": f"{impact['rssi_before']:.1f} dBm", "Predicted": f"{impact['rssi_after']:.1f} dBm", "Change": f"{impact['rssi_after'] - impact['rssi_before']:+.1f} dB"},
-            {"Metric": "SNR", "Current": f"{impact['snr_before']:.1f} dB", "Predicted": f"{impact['snr_after']:.1f} dB", "Change": f"{impact['snr_after'] - impact['snr_before']:+.1f} dB"},
-            {"Metric": "Retry Rate", "Current": f"{impact['retry_before']*100:.1f}%", "Predicted": f"{impact['retry_after']*100:.1f}%", "Change": f"{(impact['retry_after'] - impact['retry_before'])*100:+.1f}%"},
-            {"Metric": "QoE Score", "Current": f"{impact['qoe_before']:.1f}/100", "Predicted": f"{impact['qoe_after']:.1f}/100", "Change": f"{impact['qoe_after'] - impact['qoe_before']:+.1f}"}
+            {"Metric": "QoE Score", "Current": f"{qoe_score:.1f}/100" if qoe_score else "—", "Predicted": f"{qoe_after:.1f}/100", "Change": f"+{exp_gain:.1f}"},
+            {"Metric": "Configuration", "Current": cur_val, "Predicted": rec_val, "Change": "Recommended"}
         ])
         st.dataframe(df_impact, hide_index=True, use_container_width=True)
         
-        if action == "POWER_INCREASE":
-            imp_expl = f"By increasing transmit power, RSSI improves by {impact['rssi_after'] - impact['rssi_before']:.1f} dB, recovering the lost SNR margin and virtually eliminating coverage-based retries."
-        elif action == "CHANNEL_CHANGE":
-            imp_expl = f"Moving to a clean channel avoids the bursty RF interference, reducing the retry rate by {(impact['retry_before'] - impact['retry_after'])*100:.1f}% and recovering the user QoE."
-        elif action == "LOAD_BALANCE" or action == "WIDTH_ADJUST":
-            imp_expl = f"By redistributing the load and minimizing contention, the airtime competition drops significantly. This directly resolves the frame collisions, reducing the retry rate by {(impact['retry_before'] - impact['retry_after'])*100:.1f}%."
-        else:
-            imp_expl = "The recommended action adjusts RRM parameters to stabilize the link, improving overall network efficiency."
-        
-        st.markdown(f"<br>**Why this improves performance:** {imp_expl}", unsafe_allow_html=True)
+        st.markdown(f"<br>**Expected QoE Gain:** +{exp_gain:.1f} pts", unsafe_allow_html=True)
 
     st.divider()
 
@@ -1319,12 +637,11 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
         - **Source:** Standard RF engineering definition (IEEE 802.11).
         - **Reason:** Measures available signal margin above background RF noise.
         
-        ### Retry Model
-        **Formula:** `Retry = 1 - (1 - Retry_SNR)(1 - Retry_Congestion)`
-        - **Current Values:** SNR = {snr} dB, Congestion = {airtime}%
-        - **Result:** {retry}%
-        - **Source:** Engineering heuristic representing RF corruption and contention effects.
-        - **Reason:** Models retransmissions caused by both poor RF quality and channel contention.
+        ### Packet Error Rate (PER)
+        **Source:** `WiFi6Phy.compute_per()` averaged across clients (stored as `retry_rate` in telemetry).
+        - **Current PER:** {retry}%
+        - **Airtime Utilization:** {airtime}%
+        - **Reason:** PER reflects PHY-layer decode failures driven by SNR and interference.
         """.format(
             freq=freq_mhz,
             dist=round((distance_m or 1.0)/1000.0, 4),
@@ -1367,9 +684,8 @@ def build_plain_text_report(latest_row: dict, top_rec: dict, ap_id: str) -> str:
     cur_val     = (top_rec.get("current_value")     or "—") if top_rec else "—"
     rec_val     = (top_rec.get("recommended_value") or "—") if top_rec else "—"
 
-    path_loss_db  = compute_path_loss(distance_m, freq_mhz, wall_loss_db)
-    est_rx_pwr    = (round(tx_power_dbm - path_loss_db, 1)
-                     if path_loss_db is not None else None)
+    path_loss_db  = None
+    est_rx_pwr    = None
 
     if rc_from_rec and rc_from_rec not in ("NONE", "None", ""):
         root_cause_label = rc_from_rec.replace("_", " ").title()
@@ -1385,7 +701,7 @@ def build_plain_text_report(latest_row: dict, top_rec: dict, ap_id: str) -> str:
         action, rssi_dbm, snr_db, noise_dbm, distance_m,
         wall_count, retry_frac, qoe_score, int_type, airtime_frac
     )
-    impact = estimate_post_action_impact(action, rssi_dbm, snr_db, qoe_score, retry_frac)
+    # Removed estimate_post_action_impact
 
     def v(x, d=1, s=""): return f"{round(float(x),d)}{s}" if x is not None else "—"
     def vp(x, d=1): return v(float(x)*100, d, " %") if x is not None else "—"
@@ -1554,35 +870,38 @@ else:
 # ─────────────────────────────────────────────────────────────────────────────
 if ap_summaries and selected_ap:
 
-    # Scenario Event Timeline
-    st.markdown("### 📋 Scenario Event Timeline")
-    history = fetch_from_api("/scenario/history", params={"ap_id": selected_ap, "limit": 5})
-    if history:
-        parts = []
-        for h in reversed(history):
-            t_str   = pd.to_datetime(h["start_time"]).strftime("%H:%M")
-            segment = f"**{t_str} — {h['scenario_name']}**"
-            if h.get("recommendation_triggered"):
-                segment += f" &rarr; `{h['recommendation_triggered']}`"
-            parts.append(segment)
-        st.markdown("  |  ".join(parts))
-    else:
-        st.caption("No scenario history yet.")
-
-    # ── Fetch data ─────────────────────────────────────────────────────────
+    # ── Fetch ALL data once per render cycle (Single Immutable Snapshot) ──
     telemetry_data = fetch_from_api("/telemetry",       params={"ap_id": selected_ap, "limit": 100})
     recs           = fetch_from_api("/recommendations", params={"limit": 5, "ap_id": selected_ap})
     alerts         = fetch_from_api("/alerts",          params={"limit": 50, "ap_id": selected_ap})
+    history        = fetch_from_api("/scenario/history", params={"ap_id": selected_ap, "limit": 5})
 
     if not telemetry_data:
         st.info("ℹ️  No telemetry data yet. Trigger a simulation step or wait for the auto-loop.")
     else:
+        # Build immutable snapshot
         df = pd.DataFrame(telemetry_data)
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         df.set_index("timestamp", inplace=True)
-
         latest_row = df.iloc[-1].to_dict()
         top_rec    = recs[0] if recs else None
+        
+        # Scenario Locking
+        active_scenario = latest_row.get("scenario_name", "Unknown")
+
+        # Scenario Event Timeline
+        st.markdown("### 📋 Scenario Event Timeline")
+        if history:
+            parts = []
+            for h in reversed(history):
+                t_str   = pd.to_datetime(h["start_time"]).strftime("%H:%M")
+                segment = f"**{t_str} — {h['scenario_name']}**"
+                if h.get("recommendation_triggered"):
+                    segment += f" &rarr; `{h['recommendation_triggered']}`"
+                parts.append(segment)
+            st.markdown("  |  ".join(parts))
+        else:
+            st.caption("No scenario history yet.")
 
         # ── TAB LAYOUT ──────────────────────────────────────────────────────
         tab1, tab2, tab3, tab4 = st.tabs([
