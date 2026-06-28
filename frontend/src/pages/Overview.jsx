@@ -1,20 +1,22 @@
 import React, { useState, useMemo } from 'react';
-import { Box, Typography, Grid } from '@mui/material';
+import { Box, Typography, Grid, Button } from '@mui/material';
 import WifiTetheringIcon from '@mui/icons-material/WifiTethering';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
 
 import { useTelemetry }      from '../hooks/useTelemetry';
 import { useAlerts }         from '../hooks/useAlerts';
 import { useRecommendations } from '../hooks/useRecommendations';
 import { useHealthStatus }   from '../hooks/useHealthStatus';
 
-import DashboardToolbar    from '../components/DashboardToolbar';
-import QoECard             from '../components/QoECard';
-import RecommendationCard  from '../components/RecommendationCard';
-import AlertCard           from '../components/AlertCard';
-import StatusCard          from '../components/StatusCard';
-import TelemetryCharts     from '../components/TelemetryCharts';
-import InterferenceTimeline from '../components/InterferenceTimeline';
-import ApiDebugPanel       from '../components/ApiDebugPanel';
+import DashboardToolbar          from '../components/DashboardToolbar';
+import QoECard                   from '../components/QoECard';
+import RecommendationCard        from '../components/RecommendationCard';
+import AlertCard                 from '../components/AlertCard';
+import StatusCard                from '../components/StatusCard';
+import TelemetryCharts           from '../components/TelemetryCharts';
+import InterferenceTimeline      from '../components/InterferenceTimeline';
+import ApiDebugPanel             from '../components/ApiDebugPanel';
+import CausalMetricChainModal    from '../components/CausalMetricChainModal';
 
 const Overview = () => {
   /* ── fleet health (AP list + selector seed) ── */
@@ -22,6 +24,7 @@ const Overview = () => {
   const { data: healthData, loading: healthLoading, error: healthError } = healthHook;
 
   const [selectedAp, setSelectedAp] = useState('');
+  const [causalOpen, setCausalOpen]   = useState(false);
   React.useEffect(() => {
     if (healthData?.length && !selectedAp) setSelectedAp(healthData[0].ap_id);
   }, [healthData, selectedAp]);
@@ -93,12 +96,48 @@ const Overview = () => {
         </Grid>
       </Grid>
 
-      {/* ── Causal Chain ── */}
+      {/* ── Causal Chain header + Explain button ── */}
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+        <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+          Causal Chain Analysis
+        </Typography>
+        <Button
+          id="explain-causal-chain-btn"
+          variant="contained"
+          size="small"
+          startIcon={<AccountTreeIcon />}
+          onClick={() => setCausalOpen(true)}
+          disabled={!latestTelemetry}
+          sx={{
+            background: 'linear-gradient(135deg, #1976d2 0%, #3b82f6 100%)',
+            textTransform: 'none',
+            fontWeight: 700,
+            fontSize: '0.82rem',
+            boxShadow: '0 2px 8px rgba(59,130,246,0.4)',
+            '&:hover': {
+              background: 'linear-gradient(135deg, #1565c0 0%, #2563eb 100%)',
+              boxShadow: '0 4px 16px rgba(59,130,246,0.5)',
+            }
+          }}
+        >
+          Explain Causal Metric Chain
+        </Button>
+      </Box>
+
       <InterferenceTimeline
         latestTelemetry={latestTelemetry}
         previousTelemetry={previousTelemetry}
         recommendation={latestRec}
         loading={telemetryLoading}
+      />
+
+      {/* ── Causal Metric Chain Modal ── */}
+      <CausalMetricChainModal
+        open={causalOpen}
+        onClose={() => setCausalOpen(false)}
+        telemetry={latestTelemetry}
+        recommendation={latestRec}
+        apId={selectedAp}
       />
 
       {/* ── Real-time Charts ── */}

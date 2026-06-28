@@ -15,6 +15,7 @@ from src.analytics.policy_engine import RRMPolicyEngine
 from src.realistic_simulator.scenario_engine import ScenarioEngine
 from src.realistic_simulator.models import APState, ClientState
 from src.realistic_simulator.telemetry_simulator import TelemetrySimulator
+from src.realistic_simulator.digital_twin import DigitalTwinManager
 
 logger = logging.getLogger("RRM.Simulator")
 
@@ -38,9 +39,10 @@ class BackgroundSimulator:
         
         self.sim_tick = 0
 
-        # Initialize analytical engines
+        # Initialize analytical engines and Digital Twin
         self.change_detector = ChangeDetectionEngine()
         self.policy_engine = RRMPolicyEngine()
+        self.digital_twin = DigitalTwinManager()
 
         # Define default AP configs
         self.ap_configs = [
@@ -178,6 +180,10 @@ class BackgroundSimulator:
                     )
                     state["clients"].append(client)
             
+            # --- Sync to Digital Twin ---
+            self.digital_twin.sync_ap(state["ap_state"])
+            self.digital_twin.sync_clients(ap_id, state["clients"])
+            
             # --- Generate Telemetry ---
             sim = TelemetrySimulator(state["ap_state"])
             record = sim.generate_telemetry(state["clients"], scenario=scenario)
@@ -235,7 +241,8 @@ class BackgroundSimulator:
                 tx_power=record.tx_power,
                 wall_count=record.wall_count,
                 wall_loss=round(record.wall_loss, 2),
-                scenario_name=scenario.name
+                scenario_name=scenario.name,
+                spectrum_snapshot=json.dumps(record.sensing_report) if record.sensing_report else None
             )
             db.add(telemetry_row)
             db.flush()

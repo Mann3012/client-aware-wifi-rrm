@@ -1,0 +1,83 @@
+{
+    "_description": "Calibration parameters for the WiFi RRM Simulator. Modify these to tune the simulator against real measurements without changing source code.",
+
+    "propagation": {
+        "path_loss_exponent": 3.0,
+        "reference_distance_m": 1.0,
+        "shadow_fading_std_db": 5.0,
+        "environment_type": "indoor_office"
+    },
+
+    "wall_attenuation": {
+        "drywall_db": 4.0,
+        "glass_db": 3.0,
+        "wood_db": 4.0,
+        "brick_db": 10.0,
+        "concrete_db": 18.0,
+        "metal_db": 25.0
+    },
+
+    "receiver": {
+        "ap_noise_figure_db": 5.0,
+        "client_noise_figure_db": 7.0,
+        "ap_antenna_gain_dbi": 3.0,
+        "client_antenna_gain_dbi": 0.0
+    },
+
+    "transmitter": {
+        "default_tx_power_dbm": 20.0,
+        "max_tx_power_dbm": 23.0,
+        "min_tx_power_dbm": 5.0
+    },
+
+    "channel_model": {
+        "rician_k_factor_db": 6.0,
+        "enable_shadow_fading": true,
+        "enable_fast_fading": true,
+        "enable_doppler": true
+    },
+
+    "interference": {
+        "bluetooth_duty_cycle": 0.05,
+        "bluetooth_power_dbm": -10.0,
+        "bluetooth_bandwidth_mhz": 1.0,
+        "microwave_duty_cycle": 0.50,
+        "microwave_power_dbm": 5.0,
+        "microwave_bandwidth_mhz": 20.0,
+        "microwave_burst_period_s": 30.0,
+        "zigbee_duty_cycle": 0.01,
+        "zigbee_power_dbm": -15.0,
+        "zigbee_bandwidth_mhz": 2.0
+    },
+
+    "phy": {
+        "default_bandwidth_mhz": 80,
+        "default_spatial_streams": 2,
+        "default_guard_interval_us": 0.8,
+        "default_packet_length_bytes": 1500
+    },
+
+    "mac": {
+        "cw_min": 15,
+        "cw_max": 1023,
+        "max_retries": 7,
+        "rts_cts_threshold_bytes": 2347
+    },
+
+    "qoe": {
+        "excellent_threshold": 85.0,
+        "good_threshold": 65.0,
+        "fair_threshold": 40.0,
+        "default_application_type": "browsing"
+    },
+
+    "health_scoring": {
+        "client_experience_weight": 0.40,
+        "rf_health_weight": 0.20,
+        "capacity_health_weight": 0.15,
+        "interference_health_weight": 0.15,
+        "mobility_health_weight": 0.10,
+        "ap_mean_client_weight": 0.60,
+        "ap_worst_client_weight": 0.40
+    }
+}

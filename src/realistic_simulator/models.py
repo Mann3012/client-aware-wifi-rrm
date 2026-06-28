@@ -1,5 +1,9 @@
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Tuple
+
+# ─────────────────────────────────────────────────────────────────────────────
+# End-Term / Pipeline State Models (Backward Compatible)
+# ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class APState:
@@ -13,6 +17,14 @@ class APState:
     freq_mhz: float = 5180.0
     tx_power_dbm: float = 20.0
     channel_capacity_mbps: float = 300.0
+    
+    # Iteration 1 Extensions
+    spatial_streams: int = 2
+    guard_interval_us: float = 0.8
+    antenna_gain_dbi: float = 3.0
+    noise_figure_db: float = 5.0
+    bss_color: int = 1
+
 
 @dataclass
 class ClientState:
@@ -22,12 +34,23 @@ class ClientState:
     x: float = 0.0
     y: float = 0.0
     wall_count: int = 0
+    
+    # Iteration 1 Extensions
+    velocity_mps: float = 0.0
+    direction_rad: float = 0.0
+    device_type: str = "laptop"
+    application_type: str = "browsing"
+    antenna_gain_dbi: float = 0.0
+    noise_figure_db: float = 7.0
+    mobility_model: str = "stationary"
+
 
 @dataclass
 class QoE:
     """Quality of Experience category and score."""
     score: float
     category: str
+
 
 @dataclass
 class InterferenceEvent:
@@ -37,6 +60,88 @@ class InterferenceEvent:
     airtime_boost_percent: float
     duration_minutes: int
     active: bool = False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# New Iteration 1 Models
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class PhyMetrics:
+    """Output metrics from the Physical (PHY) Layer for a single client."""
+    rssi_dbm: float
+    noise_floor_dbm: float
+    interference_power_dbm: float
+    sinr_db: float
+    mcs_index: int
+    spatial_streams: int
+    guard_interval_us: float
+    phy_rate_mbps: float
+    per: float  # Packet Error Rate
+
+
+# -- Digital Twin State Models --
+
+@dataclass
+class APDigitalTwin:
+    ap_id: str
+    channel: int
+    channel_width_mhz: int
+    tx_power_dbm: float
+    antenna_gain_dbi: float
+    noise_figure_db: float
+    bss_color: int
+    x: float
+    y: float
+
+@dataclass
+class ClientDigitalTwin:
+    client_id: str
+    ap_id: str
+    x: float
+    y: float
+    velocity_mps: float
+    direction_rad: float
+    device_type: str
+    application_type: str
+    demand_mbps: float
+    antenna_gain_dbi: float
+    noise_figure_db: float
+    mobility_model: str
+    historical_success_rate: float = 1.0
+    recent_retry_rates: List[float] = field(default_factory=list)
+
+@dataclass
+class ChannelStateTwin:
+    path_loss_db: float
+    shadow_loss_db: float
+    fast_fading_db: float
+    doppler_shift_hz: float
+
+@dataclass
+class InterferenceSourceTwin:
+    source_id: str
+    interference_type: str
+    frequency_mhz: float
+    bandwidth_mhz: float
+    power_dbm: float
+    duty_cycle: float
+    x: float
+    y: float
+
+@dataclass
+class DigitalTwinState:
+    """Single source of truth tracking APs, clients, channel states, and active interference."""
+    aps: Dict[str, APDigitalTwin] = field(default_factory=dict)
+    clients: Dict[str, ClientDigitalTwin] = field(default_factory=dict)
+    # Key: (ap_id, client_id)
+    channel_states: Dict[Tuple[str, str], ChannelStateTwin] = field(default_factory=dict)
+    interference_sources: List[InterferenceSourceTwin] = field(default_factory=list)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Telemetry Output
+# ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class TelemetryRecord:
@@ -58,9 +163,20 @@ class TelemetryRecord:
     wall_count: int = 0
     wall_loss: float = 0.0
     recommendations: list = None
+    
+    # Iteration 1 Extensions (Nullable for backward compatibility)
+    sinr: Optional[float] = None
+    mcs_index: Optional[int] = None
+    phy_rate_mbps: Optional[float] = None
+    per: Optional[float] = None
+    latency_ms: Optional[float] = None
+    throughput_mbps: Optional[float] = None
+    
+    # Iteration 4 Extension: Sensing Radio
+    sensing_report: Optional[dict] = None
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "ap_id": self.ap_id,
             "channel": self.channel,
             "client_count": self.client_count,
@@ -79,3 +195,19 @@ class TelemetryRecord:
             "wall_loss": round(self.wall_loss, 2),
             "recommendations": self.recommendations or []
         }
+        
+        # Add new fields if they exist
+        if self.sinr is not None:
+            d["sinr"] = round(self.sinr, 2)
+        if self.mcs_index is not None:
+            d["mcs_index"] = self.mcs_index
+        if self.phy_rate_mbps is not None:
+            d["phy_rate_mbps"] = round(self.phy_rate_mbps, 2)
+        if self.per is not None:
+            d["per"] = round(self.per, 4)
+        if self.latency_ms is not None:
+            d["latency_ms"] = round(self.latency_ms, 2)
+        if self.throughput_mbps is not None:
+            d["throughput_mbps"] = round(self.throughput_mbps, 2)
+            
+        return d

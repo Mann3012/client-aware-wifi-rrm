@@ -112,13 +112,92 @@ class CUSUMDetector:
         return is_anomaly, last_val, threshold_metric_val, description
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Alarm Hysteresis (Iteration 4 Enhancement)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AlarmHysteresis:
+    """Prevents alert flapping by requiring an alarm condition to persist
+    for a minimum number of consecutive ticks before firing, and then
+    enforcing a cooldown period before the same alarm can fire again.
+
+    This models the hysteresis behavior described in the Arista RRM architecture
+    where rapid oscillation of RRM actions must be prevented.
+    """
+    def __init__(self, activation_count: int = 3, cooldown_ticks: int = 5):
+        """
+        Args:
+            activation_count: Number of consecutive anomalous readings required
+                              before the alarm fires.
+            cooldown_ticks: Number of ticks after an alarm fires before it can
+                            fire again (even if conditions persist).
+        """
+        self.activation_count = activation_count
+        self.cooldown_ticks = cooldown_ticks
+
+        # State per (ap_id, metric) pair
+        self._consecutive_counts: Dict[str, int] = {}
+        self._cooldown_remaining: Dict[str, int] = {}
+
+    def _key(self, ap_id: str, metric: str) -> str:
+        return f"{ap_id}::{metric}"
+
+    def should_fire(self, ap_id: str, metric: str, is_anomaly: bool) -> bool:
+        """Evaluates whether an alert should actually fire given hysteresis state.
+
+        Args:
+            ap_id: The access point identifier.
+            metric: The metric name (e.g., "retry_rate", "noise_floor").
+            is_anomaly: Whether the raw detector flagged this tick as anomalous.
+
+        Returns:
+            True if the alert should fire (consecutive threshold met and not in cooldown).
+        """
+        key = self._key(ap_id, metric)
+
+        # Tick down cooldowns
+        if key in self._cooldown_remaining:
+            if self._cooldown_remaining[key] > 0:
+                self._cooldown_remaining[key] -= 1
+                # During cooldown, reset consecutive count and suppress
+                self._consecutive_counts[key] = 0
+                return False
+
+        if is_anomaly:
+            self._consecutive_counts[key] = self._consecutive_counts.get(key, 0) + 1
+        else:
+            self._consecutive_counts[key] = 0
+            return False
+
+        if self._consecutive_counts[key] >= self.activation_count:
+            # Fire the alarm and start cooldown
+            self._consecutive_counts[key] = 0
+            self._cooldown_remaining[key] = self.cooldown_ticks
+            logger.info(
+                "Alarm fired for %s/%s after %d consecutive detections. "
+                "Cooldown: %d ticks.",
+                ap_id, metric, self.activation_count, self.cooldown_ticks,
+            )
+            return True
+
+        return False
+
+    def reset(self, ap_id: str, metric: str) -> None:
+        """Manually resets hysteresis state for a specific alarm."""
+        key = self._key(ap_id, metric)
+        self._consecutive_counts.pop(key, None)
+        self._cooldown_remaining.pop(key, None)
+
+
 class ChangeDetectionEngine:
     """
     Engine that wraps EWMA and CUSUM detectors to process raw telemetry rows and identify anomalies.
+    Enhanced in Iteration 4 with alarm hysteresis to prevent flapping.
     """
     def __init__(self):
         self.ewma_detector = EWMADetector()
         self.cusum_detector = CUSUMDetector()
+        self.hysteresis = AlarmHysteresis(activation_count=3, cooldown_ticks=5)
 
     def analyze_ap_telemetry(self, df_telemetry: pd.DataFrame) -> List[Dict[str, Any]]:
         """
@@ -136,7 +215,7 @@ class ChangeDetectionEngine:
         # 1. Check for Retry Rate Spike (using EWMA)
         retry_series = df_telemetry['retry_rate']
         is_retry_anomaly, val, thresh, desc = self.ewma_detector.detect(retry_series)
-        if is_retry_anomaly:
+        if self.hysteresis.should_fire(ap_id, "retry_rate", is_retry_anomaly):
             alerts.append({
                 "timestamp": latest_timestamp,
                 "ap_id": ap_id,
@@ -150,7 +229,7 @@ class ChangeDetectionEngine:
         # 2. Check for Airtime Congestion (using EWMA)
         airtime_series = df_telemetry['airtime_utilization']
         is_airtime_anomaly, val, thresh, desc = self.ewma_detector.detect(airtime_series)
-        if is_airtime_anomaly:
+        if self.hysteresis.should_fire(ap_id, "airtime_utilization", is_airtime_anomaly):
             alerts.append({
                 "timestamp": latest_timestamp,
                 "ap_id": ap_id,
@@ -164,7 +243,7 @@ class ChangeDetectionEngine:
         # 3. Check for Persistent Interference / Noise Floor Shift (using CUSUM)
         noise_series = df_telemetry['noise_floor']
         is_noise_anomaly, val, thresh, desc = self.cusum_detector.detect(noise_series)
-        if is_noise_anomaly:
+        if self.hysteresis.should_fire(ap_id, "noise_floor", is_noise_anomaly):
             alerts.append({
                 "timestamp": latest_timestamp,
                 "ap_id": ap_id,

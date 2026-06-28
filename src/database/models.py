@@ -33,6 +33,7 @@ class Telemetry(Base):
     wall_count = Column(Integer, nullable=True)      # Number of walls between AP and client
     wall_loss = Column(Float, nullable=True)         # Obstacle attenuation in dB
     scenario_name = Column(String(100), default="Normal Office") # Active scenario name
+    spectrum_snapshot = Column(Text, nullable=True)  # JSON serialization of sensing radio report
 
     def __repr__(self):
         return f"<Telemetry ap_id={self.ap_id} timestamp={self.timestamp} channel={self.channel}>"

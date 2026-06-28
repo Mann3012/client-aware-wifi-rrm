@@ -23,6 +23,7 @@ class TelemetryBase(BaseModel):
     wall_count: Optional[int] = None
     wall_loss: Optional[float] = None
     scenario_name: Optional[str] = None
+    spectrum_snapshot: Optional[str] = None
 
 class ScenarioEventBase(BaseModel):
     ap_id: str
