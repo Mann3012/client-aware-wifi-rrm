@@ -144,3 +144,9 @@ test_env/
 venv/
 __pycache__/
 *.pyc
+
+test_env/
+venv/
+.venv/
+__pycache__/
+*.pyc
