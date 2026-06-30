@@ -164,7 +164,7 @@ const TelemetryCharts = ({ data, loading }) => {
         </Grid>
         <Grid item xs={12} md={6}>
           <ChartCard
-            title="Retry Rate vs Time"
+            title="Packet Error Rate (PER) vs Time"
             data={retryData}
             dataKey="retry_pct"
             name="Retry"
@@ -215,25 +215,24 @@ const TelemetryCharts = ({ data, loading }) => {
                         tickLine={false}
                       />
                       <YAxis
-                        domain={[0, 10]}
+                        domain={[0, 100]}
                         stroke="#4b5680"
                         tick={{ fontSize: 14, fill: '#94a3b8' }}
-                        width={40}
+                        width={44}
                         tickLine={false}
-                        ticks={[0, 2, 4, 6, 8, 10]}
+                        ticks={[0, 25, 50, 65, 85, 100]}
                       />
                       <Tooltip content={<CustomTooltip />} />
 
-                      {/* Colour bands: Poor / Fair / Good / Excellent */}
-                      <ReferenceArea y1={0} y2={4} fill="#c62828" fillOpacity={0.08} />
-                      <ReferenceArea y1={4} y2={6} fill="#f57f17" fillOpacity={0.08} />
-                      <ReferenceArea y1={6} y2={8} fill="#f9a825" fillOpacity={0.06} />
-                      <ReferenceArea y1={8} y2={10} fill="#2e7d32" fillOpacity={0.08} />
+                      <ReferenceArea y1={0} y2={40} fill="#c62828" fillOpacity={0.08} />
+                      <ReferenceArea y1={40} y2={65} fill="#f57f17" fillOpacity={0.08} />
+                      <ReferenceArea y1={65} y2={85} fill="#f9a825" fillOpacity={0.06} />
+                      <ReferenceArea y1={85} y2={100} fill="#2e7d32" fillOpacity={0.08} />
 
-                      <ReferenceLine y={6} stroke="#f57f17" strokeDasharray="4 4"
-                        label={{ value: 'Fair threshold (6)', position: 'insideTopRight', fill: '#ffcc02', fontSize: 12 }} />
-                      <ReferenceLine y={8} stroke="#66bb6a" strokeDasharray="4 4"
-                        label={{ value: 'Good threshold (8)', position: 'insideTopRight', fill: '#a5d6a7', fontSize: 12 }} />
+                      <ReferenceLine y={65} stroke="#f57f17" strokeDasharray="4 4"
+                        label={{ value: 'Good threshold (65)', position: 'insideTopRight', fill: '#ffcc02', fontSize: 12 }} />
+                      <ReferenceLine y={85} stroke="#66bb6a" strokeDasharray="4 4"
+                        label={{ value: 'Excellent threshold (85)', position: 'insideTopRight', fill: '#a5d6a7', fontSize: 12 }} />
 
                       <Area
                         type="monotone"

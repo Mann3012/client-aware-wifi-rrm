@@ -17,6 +17,7 @@ import TelemetryCharts           from '../components/TelemetryCharts';
 import InterferenceTimeline      from '../components/InterferenceTimeline';
 import ApiDebugPanel             from '../components/ApiDebugPanel';
 import CausalMetricChainModal    from '../components/CausalMetricChainModal';
+import SpectrumSnapshotPanel     from '../components/SpectrumSnapshotPanel';
 
 const Overview = () => {
   /* ── fleet health (AP list + selector seed) ── */
@@ -123,6 +124,8 @@ const Overview = () => {
           Explain Causal Metric Chain
         </Button>
       </Box>
+
+      <SpectrumSnapshotPanel telemetry={latestTelemetry} loading={telemetryLoading} />
 
       <InterferenceTimeline
         latestTelemetry={latestTelemetry}

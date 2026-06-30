@@ -138,3 +138,9 @@ test_install_venv/
 __pycache__/
 
 Reading material/
+
+
+test_env/
+venv/
+__pycache__/
+*.pyc

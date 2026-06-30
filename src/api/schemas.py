@@ -24,6 +24,14 @@ class TelemetryBase(BaseModel):
     wall_loss: Optional[float] = None
     scenario_name: Optional[str] = None
     spectrum_snapshot: Optional[str] = None
+    
+    path_loss_db: Optional[float] = None
+    estimated_rx_power_dbm: Optional[float] = None
+    sinr_db: Optional[float] = None
+    mcs_index: Optional[float] = None
+    phy_rate_mbps: Optional[float] = None
+    latency_ms: Optional[float] = None
+    throughput_mbps: Optional[float] = None
 
 class ScenarioEventBase(BaseModel):
     ap_id: str

@@ -6,8 +6,8 @@ import TrendingFlatIcon from '@mui/icons-material/TrendingFlat';
 
 const QoECard = ({ score, category, loading, previousScore }) => {
   let statusColor = 'warning.main';
-  if (score >= 8) statusColor = 'success.main';
-  else if (score < 6) statusColor = 'error.main';
+  if (score >= 85) statusColor = 'success.main';
+  else if (score < 65) statusColor = 'error.main';
 
   let trendDirection = null;
   let trendValueStr = null;
@@ -54,7 +54,7 @@ const QoECard = ({ score, category, loading, previousScore }) => {
           <Box sx={{ position: 'relative', display: 'inline-flex', my: 2 }}>
             <CircularProgress 
               variant="determinate" 
-              value={(score || 0) * 10} 
+              value={score || 0} 
               size={140} 
               thickness={4} 
               sx={{ color: statusColor }}

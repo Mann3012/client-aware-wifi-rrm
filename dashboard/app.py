@@ -358,16 +358,22 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
     rc_from_rec  = (top_rec.get("root_cause")   or "")     if top_rec else ""
     rec_reason   = (top_rec.get("reason")        or "")    if top_rec else ""
 
-    path_loss_db = None
-    est_rx_pwr   = None
+    path_loss_db   = latest_row.get("path_loss_db")
+    est_rx_pwr     = latest_row.get("estimated_rx_power_dbm")
+    sinr_val       = latest_row.get("sinr_db")
+    mcs_val        = latest_row.get("mcs_index")
+    phy_rate_val   = latest_row.get("phy_rate_mbps")
+    latency_val    = latest_row.get("latency_ms")
+    throughput_val = latest_row.get("throughput_mbps")
+
     snr_label, _ = get_snr_label(snr_db)
     mod_scheme   = get_modulation(snr_db)
 
     retry_pct    = round((retry_frac or 0) * 100, 1)
     airtime_pct  = round((airtime_frac or 0) * 100, 1)
     pkt_loss_pct = round(retry_pct * 0.70, 1)
-    thput_deg_pct= round(retry_pct * 1.50, 1)
-    latency_ms   = round(retry_pct * 1.20, 0)
+    
+    def _cv(v, d=1, s=""): return f"{round(float(v),d)}{s}" if v is not None else "—"
 
     spectrum = parse_spectrum_snapshot(latest_row.get("spectrum_snapshot"))
 
@@ -390,24 +396,24 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
     # SEC 0: Executive Summary
     st.subheader("SECTION 0: EXECUTIVE SUMMARY")
     if "Coverage" in dominant_cause["label"]:
-        exec_summary = f"Excessive path loss reduced RSSI and SNR. This degradation increased retransmissions ({retry_pct}%) and reduced user QoE ({qoe_score:.1f}/100)."
+        exec_summary = f"Excessive path loss reduced RSSI and SNR. This degradation increased retransmissions ({retry_pct}%) and reduced user QoE ({_cv(qoe_score, 1)}/100)."
     elif "Bluetooth" in dominant_cause["label"]:
-        exec_summary = f"Intermittent Bluetooth interference increased retransmissions ({retry_pct}%) despite healthy average signal quality, reducing network efficiency and QoE ({qoe_score:.1f}/100)."
+        exec_summary = f"Intermittent Bluetooth interference increased retransmissions ({retry_pct}%) despite healthy average signal quality, reducing network efficiency and QoE ({_cv(qoe_score, 1)}/100)."
     elif "Microwave" in dominant_cause["label"]:
-        exec_summary = f"Broadband microwave interference caused packet corruption and retry events ({retry_pct}%), leading to reduced throughput and QoE ({qoe_score:.1f}/100)."
+        exec_summary = f"Broadband microwave interference caused packet corruption and retry events ({retry_pct}%), leading to reduced throughput and QoE ({_cv(qoe_score, 1)}/100)."
     elif "Neighbor" in dominant_cause["label"] or "Co-Channel" in dominant_cause["label"]:
-        exec_summary = f"Neighbor AP traffic increased co-channel contention and reduced available capacity, elevating retries ({retry_pct}%) and lowering QoE ({qoe_score:.1f}/100)."
+        exec_summary = f"Neighbor AP traffic increased co-channel contention and reduced available capacity, elevating retries ({retry_pct}%) and lowering QoE ({_cv(qoe_score, 1)}/100)."
     elif "Congestion" in dominant_cause["label"]:
-        exec_summary = f"Heavy airtime utilization ({airtime_pct}%) increased contention and reduced network efficiency, leading to higher collision probabilities and lower QoE ({qoe_score:.1f}/100)."
+        exec_summary = f"Heavy airtime utilization ({airtime_pct}%) increased contention and reduced network efficiency, leading to higher collision probabilities and lower QoE ({_cv(qoe_score, 1)}/100)."
     else:
-        exec_summary = f"Performance metrics deviated from nominal baselines. This lowered SNR, increased retransmissions ({retry_pct}%), and reduced user QoE ({qoe_score:.1f}/100)."
+        exec_summary = f"Performance metrics deviated from nominal baselines. This lowered SNR, increased retransmissions ({retry_pct}%), and reduced user QoE ({_cv(qoe_score, 1)}/100)."
 
     exec_summary += f" The diagnostic engine identified **{dominant_cause['label']}** as the dominant root cause with {int(dominant_cause['conf']*100)}% confidence and recommended **{action}** to mitigate the issue."
     st.markdown(f"*{exec_summary}*")
     
     st.markdown("#### Causal Chain Summary")
     if "Coverage" in dominant_cause["label"]:
-        flow = f"Distance & Obstacles\n&darr;\nHigh Path Loss ({path_loss_db:.1f} dB)\n&darr;\nWeak Received Signal ({rssi_dbm:.1f} dBm)\n&darr;\nReduced SNR ({snr_db:.1f} dB)\n&darr;\nLower MCS\n&darr;\nRetransmissions ({retry_pct}%)\n&darr;\nThroughput Loss\n&darr;\n{action} Recommended"
+        flow = f"Distance & Obstacles\n&darr;\nHigh Path Loss ({_cv(path_loss_db, 1, ' dB')})\n&darr;\nWeak Received Signal ({_cv(rssi_dbm, 1, ' dBm')})\n&darr;\nReduced SNR ({_cv(snr_db, 1, ' dB')})\n&darr;\nLower MCS\n&darr;\nRetransmissions ({retry_pct}%)\n&darr;\nThroughput Loss\n&darr;\n{action} Recommended"
     elif "Bluetooth" in dominant_cause["label"]:
         flow = f"Bluetooth Activity\n&darr;\nBurst RF Interference\n&darr;\nFrame Collisions\n&darr;\nRetransmissions ({retry_pct}%)\n&darr;\nReduced Efficiency\n&darr;\n{action} Recommended"
     elif "Microwave" in dominant_cause["label"]:
@@ -462,32 +468,40 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
     st.divider()
 
     # SEC 2: Propagation Analysis
-    st.subheader("SECTION 2: PROPAGATION ANALYSIS")
+    st.subheader("SECTION 2: PROPAGATION Analysis")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Transmit Power", f"{tx_power_dbm:.0f} dBm")
-    c2.metric("Path Loss (est.)", f"{path_loss_db:.1f} dB" if path_loss_db else "—")
-    c3.metric("Measured RSSI", f"{rssi_dbm:.1f} dBm" if rssi_dbm else "—")
-    c4.metric("Model RSSI (TX−PL)", f"{est_rx_pwr:.1f} dBm" if est_rx_pwr else "—")
+    c1.metric("Transmit Power", _cv(tx_power_dbm, 0, ' dBm'))
+    c2.metric("Path Loss", _cv(path_loss_db, 1, ' dB'))
+    c3.metric("Measured RSSI", _cv(rssi_dbm, 1, ' dBm'))
+    c4.metric("Model RSSI (TX−PL)", _cv(est_rx_pwr, 1, ' dBm'))
 
-    prop_reasoning = (
-        f"The signal originates at {tx_power_dbm:.0f} dBm. Path loss over {distance_m:.1f} m is estimated at "
-        f"{path_loss_db:.1f} dB (model). The **measured RSSI** from telemetry is {rssi_dbm:.1f} dBm — this is the "
-        f"authoritative value used for SNR and QoE calculations in the simulator."
-    )
-    st.markdown(prop_reasoning)
+    if path_loss_db is None:
+        st.info("Propagation telemetry unavailable for this historical snapshot (captured before schema migration v001).")
+    else:
+        prop_reasoning = (
+            f"The signal originates at {_cv(tx_power_dbm, 0, ' dBm')}. Path loss over {_cv(distance_m, 1, ' m')} is estimated at "
+            f"{_cv(path_loss_db, 1, ' dB')} (model). The **measured RSSI** from telemetry is {_cv(rssi_dbm, 1, ' dBm')} — this is the "
+            f"authoritative value used for SNR and QoE calculations in the simulator."
+        )
+        st.markdown(prop_reasoning)
     st.divider()
 
     # SEC 3: RF Signal Quality
     st.subheader("SECTION 3: RF SIGNAL QUALITY")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("RSSI", f"{rssi_dbm:.1f} dBm" if rssi_dbm else "—")
-    c2.metric("Noise Floor", f"{noise_dbm:.1f} dBm" if noise_dbm else "—")
-    c3.metric("SNR", f"{snr_db:.1f} dB" if snr_db else "—")
+    c1.metric("RSSI", _cv(rssi_dbm, 1, ' dBm'))
+    c2.metric("Noise Floor", _cv(noise_dbm, 1, ' dBm'))
+    c3.metric("SNR", _cv(snr_db, 1, ' dB'))
     
     snr_class = "🔴 Poor" if snr_db and snr_db < 10 else "🟡 Moderate" if snr_db and snr_db < 20 else "🟢 Good" if snr_db and snr_db <= 25 else "🟢 Excellent"
     c4.metric("SNR Classification", snr_class)
     
-    rf_reasoning = f"The measured Signal-to-Noise Ratio (SNR) is {snr_db:.1f} dB, derived from the {rssi_dbm:.1f} dBm signal strength against a noise floor of {noise_dbm:.1f} dBm. "
+    if sinr_val is not None:
+        st.markdown(f"**SINR (Signal-to-Interference+Noise Ratio):** {_cv(sinr_val, 1, ' dB')}")
+    else:
+        st.info("SINR telemetry unavailable for this historical snapshot.")
+        
+    rf_reasoning = f"The measured Signal-to-Noise Ratio (SNR) is {_cv(snr_db, 1, ' dB')}, derived from the {_cv(rssi_dbm, 1, ' dBm')} signal strength against a noise floor of {_cv(noise_dbm, 1, ' dBm')}. "
     if snr_db and snr_db >= 20:
         rf_reasoning += "This indicates a healthy RF link capable of sustaining high-order modulation schemes."
     else:
@@ -501,7 +515,12 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
     c1.metric("Packet Error Rate (PER)", f"{retry_pct}%")
     c2.metric("Packet Loss (Est)", f"{pkt_loss_pct}%")
     c3.metric("Airtime Utilization", f"{airtime_pct}%")
-    c4.metric("Modulation Efficiency", mod_scheme)
+    
+    if mcs_val is not None and phy_rate_val is not None:
+        c4.metric("PHY Rate", _cv(phy_rate_val, 1, ' Mbps'))
+        st.markdown(f"**MCS Index:** {mcs_val} ({mod_scheme})")
+    else:
+        c4.metric("Modulation Efficiency", mod_scheme)
     
     if "Bluetooth" in dominant_cause["label"] or "Microwave" in dominant_cause["label"]:
         net_reasoning = f"The RF link remains strong and supports high modulation rates. However, intermittent bursty interference is overlapping with Wi-Fi frames. This elevates the retransmission rate to {retry_pct}% and reduces overall channel efficiency despite the healthy average SNR."
@@ -520,9 +539,9 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
     # SEC 5: User Experience Impact
     st.subheader("SECTION 5: USER EXPERIENCE IMPACT")
     c1, c2, c3 = st.columns(3)
-    c1.metric("Throughput Degradation", f"~{thput_deg_pct}%")
-    c2.metric("Latency Increase", f"~{latency_ms} ms")
-    c3.metric("QoE Score", f"{qoe_score:.1f} / 100" if qoe_score else "—")
+    c1.metric("Throughput", _cv(throughput_val, 1, ' Mbps'))
+    c2.metric("Latency", _cv(latency_val, 1, ' ms'))
+    c3.metric("QoE Score", _cv(qoe_score, 1, ' / 100'))
     
     if qoe_score and qoe_score >= 85:
         qoe_reasoning = "User experience remains largely unaffected. The network easily compensates for any minor environmental factors."
@@ -547,7 +566,7 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
         st.markdown(f"- ✓ Retransmission rate elevated ({retry_pct}%)")
         st.markdown(f"- ✓ Average RSSI and SNR remain healthy")
     elif "Microwave" in dominant_cause['label']:
-        st.markdown(f"- ✓ Broadband noise detected ({noise_dbm:.1f} dBm)")
+        st.markdown(f"- ✓ Broadband noise detected ({_cv(noise_dbm, 1, ' dBm')})")
         st.markdown(f"- ✓ Packet corruption rate increased ({retry_pct}%)")
     elif "Neighbor" in dominant_cause['label'] or "Co-Channel" in dominant_cause['label']:
         st.markdown(f"- ✓ Co-channel contention detected from Neighbor AP")
@@ -555,11 +574,11 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
     elif "Congestion" in dominant_cause['label']:
         st.markdown(f"- ✓ Airtime utilization extremely high ({airtime_pct}%)")
         st.markdown(f"- ✓ Channel saturation observed")
-        st.markdown(f"- ✓ Excellent RF signal quality (SNR: {snr_db:.1f} dB)")
+        st.markdown(f"- ✓ Excellent RF signal quality (SNR: {_cv(snr_db, 1, ' dB')})")
     elif "Coverage" in dominant_cause['label']:
-        st.markdown(f"- ✓ RSSI degraded below -78 dBm ({rssi_dbm:.1f} dBm)")
-        st.markdown(f"- ✓ Path loss significant ({path_loss_db:.1f} dB)")
-        st.markdown(f"- ✓ Noise floor is clean ({noise_dbm:.1f} dBm)")
+        st.markdown(f"- ✓ RSSI degraded below -78 dBm ({_cv(rssi_dbm, 1, ' dBm')})")
+        st.markdown(f"- ✓ Path loss significant ({_cv(path_loss_db, 1, ' dB')})")
+        st.markdown(f"- ✓ Noise floor is clean ({_cv(noise_dbm, 1, ' dBm')})")
         st.markdown(f"- ✓ Airtime is nominal")
         
     st.markdown("**Alternative Causes Considered:**")
@@ -569,11 +588,11 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
         for cause in ranked_causes[1:3]:
             st.markdown(f"*{cause['label']}*")
             if "Coverage" in cause['label']:
-                st.markdown(f"  - ✗ RSSI is stronger than -65 dBm" if rssi_dbm >= -65 else f"  - ✗ RSSI is adequate ({rssi_dbm:.1f} dBm)")
-                st.markdown(f"  - ✗ Excellent SNR ({snr_db:.1f} dB)" if snr_db >= 25 else "")
+                st.markdown(f"  - ✗ RSSI is stronger than -65 dBm" if rssi_dbm and rssi_dbm >= -65 else f"  - ✗ RSSI is adequate ({_cv(rssi_dbm, 1, ' dBm')})")
+                st.markdown(f"  - ✗ Excellent SNR ({_cv(snr_db, 1, ' dB')})" if snr_db and snr_db >= 25 else "")
                 st.markdown(f"  - ✗ Coverage symptoms absent")
             elif "Interference" in cause['label']:
-                st.markdown(f"  - ✗ Noise floor is clean ({noise_dbm:.1f} dBm)" if noise_dbm < -90 else "  - ✗ Symptoms align better with primary cause")
+                st.markdown(f"  - ✗ Noise floor is clean ({_cv(noise_dbm, 1, ' dBm')})" if noise_dbm and noise_dbm < -90 else "  - ✗ Symptoms align better with primary cause")
             elif "Congestion" in cause['label']:
                 st.markdown(f"  - ✗ Airtime utilization only {airtime_pct}%" if airtime_pct < 75 else "  - ✗ Symptoms align better with primary cause")
                 st.markdown(f"  - ✗ Channel saturation not observed" if airtime_pct < 75 else "")
@@ -690,8 +709,13 @@ def build_plain_text_report(latest_row: dict, top_rec: dict, ap_id: str) -> str:
     cur_val     = (top_rec.get("current_value")     or "—") if top_rec else "—"
     rec_val     = (top_rec.get("recommended_value") or "—") if top_rec else "—"
 
-    path_loss_db  = None
-    est_rx_pwr    = None
+    path_loss_db   = latest_row.get("path_loss_db")
+    est_rx_pwr     = latest_row.get("estimated_rx_power_dbm")
+    sinr_val       = latest_row.get("sinr_db")
+    mcs_val        = latest_row.get("mcs_index")
+    phy_rate_val   = latest_row.get("phy_rate_mbps")
+    latency_val    = latest_row.get("latency_ms")
+    throughput_val = latest_row.get("throughput_mbps")
 
     if rc_from_rec and rc_from_rec not in ("NONE", "None", ""):
         root_cause_label = rc_from_rec.replace("_", " ").title()
@@ -742,7 +766,8 @@ def build_plain_text_report(latest_row: dict, top_rec: dict, ap_id: str) -> str:
         "━" * 40,
         f"  RSSI                         : {v(rssi_dbm, 1, ' dBm')}",
         f"  Noise Floor                  : {v(noise_dbm, 1, ' dBm')}",
-        f"  SNR = RSSI − Noise Floor     : {v(rssi_dbm, 1, ' dBm')} − ({v(noise_dbm, 1, ' dBm')}) = {v(snr_db, 1, ' dB')}",
+        f"  SNR                          : {v(snr_db, 1, ' dB')}",
+        f"  SINR                         : {v(sinr_val, 1, ' dB')}",
         f"  SNR Quality Tier             : {snr_label_txt}",
         "",
         "━" * 40,
@@ -751,13 +776,15 @@ def build_plain_text_report(latest_row: dict, top_rec: dict, ap_id: str) -> str:
         f"  Retry Rate                   : {vp(retry_frac)}",
         f"  Packet Loss (est.)           : {v((retry_frac or 0)*70, 1, ' %')}",
         f"  Modulation Scheme            : {mod_scheme}",
+        f"  MCS Index                    : {v(mcs_val, 0)}",
+        f"  PHY Rate                     : {v(phy_rate_val, 1, ' Mbps')}",
         f"  Airtime Utilization          : {vp(airtime_frac)}",
         "",
         "━" * 40,
         " [5] USER EXPERIENCE IMPACT",
         "━" * 40,
-        f"  Throughput Degradation (est.): ~{v((retry_frac or 0)*100*1.5, 1, ' %')}",
-        f"  Latency Increase (est.)      : ~{v((retry_frac or 0)*100*1.2, 0, ' ms')}",
+        f"  Throughput                   : {v(throughput_val, 1, ' Mbps')}",
+        f"  Latency                      : {v(latency_val, 1, ' ms')}",
         f"  QoE Score                    : {v(qoe_score, 1, ' / 100')}  ({qoe_cat})",
         "",
         "━" * 40,
@@ -778,14 +805,6 @@ def build_plain_text_report(latest_row: dict, top_rec: dict, ap_id: str) -> str:
         "  Justification:",
         "",
         f"  {just}",
-        "",
-        "━" * 40,
-        " [8] PREDICTED IMPACT (if recommendation applied)",
-        "━" * 40,
-        f"  RSSI     : {v(impact['rssi_before'], 1, ' dBm')}  →  {v(impact['rssi_after'], 1, ' dBm')}",
-        f"  SNR      : {v(impact['snr_before'], 1, ' dB')}  →  {v(impact['snr_after'], 1, ' dB')}",
-        f"  QoE      : {v(impact['qoe_before'], 1, ' / 100')}  →  {v(impact['qoe_after'], 1, ' / 100')}",
-        f"  Retry    : {vp(impact['retry_before'])}  →  {vp(impact['retry_after'])}",
         "",
         "═" * 65,
         "  End of Report",

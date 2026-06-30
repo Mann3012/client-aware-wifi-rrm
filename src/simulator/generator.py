@@ -242,6 +242,13 @@ class BackgroundSimulator:
                 wall_count=record.wall_count,
                 wall_loss=round(record.wall_loss, 2),
                 scenario_name=scenario.name,
+                path_loss_db=record.path_loss_db,
+                estimated_rx_power_dbm=record.estimated_rx_power_dbm,
+                sinr_db=record.sinr_db,
+                mcs_index=record.mcs_index,
+                phy_rate_mbps=record.phy_rate_mbps,
+                latency_ms=record.latency_ms,
+                throughput_mbps=record.throughput_mbps,
                 spectrum_snapshot=json.dumps(record.sensing_report) if record.sensing_report else None
             )
             db.add(telemetry_row)

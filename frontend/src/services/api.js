@@ -28,7 +28,7 @@ const getMockTelemetry = () => ([{
   airtime_utilization: 0.45,
   retry_rate: 0.05,
   client_count: 12,
-  qoe_score: 8.5,
+  qoe_score: 85.0,
   qoe_category: "Excellent",
   interference_type: "None"
 }]);
@@ -82,7 +82,7 @@ export const fetchTelemetry = async (ap_id = null, limit = 100) => {
         noise_floor: -75,
         snr: 10,
         retry_rate: 0.45,
-        qoe_score: 3.2,
+        qoe_score: 35.0,
         qoe_category: 'Poor'
       };
     }

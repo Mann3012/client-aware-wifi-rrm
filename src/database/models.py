@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import Column, Integer, Float, String, DateTime, Text
+from sqlalchemy import Column, Integer, Float, String, DateTime, Text, JSON
 from src.database.connection import Base
 from src.database.connection import Base
 
@@ -33,7 +33,18 @@ class Telemetry(Base):
     wall_count = Column(Integer, nullable=True)      # Number of walls between AP and client
     wall_loss = Column(Float, nullable=True)         # Obstacle attenuation in dB
     scenario_name = Column(String(100), default="Normal Office") # Active scenario name
-    spectrum_snapshot = Column(Text, nullable=True)  # JSON serialization of sensing radio report
+    
+    # Representative-client per-link fields (Nullable for backward compatibility)
+    path_loss_db           = Column(Float, nullable=True)  # Representative client path loss (dB)
+    estimated_rx_power_dbm = Column(Float, nullable=True)  # Deterministic link-budget RX power (dBm)
+    sinr_db                = Column(Float, nullable=True)  # Representative client SINR (dB)
+    mcs_index              = Column(Float, nullable=True)  # Representative client MCS index
+    phy_rate_mbps          = Column(Float, nullable=True)  # Representative client PHY rate (Mbps)
+    latency_ms             = Column(Float, nullable=True)  # Representative client end-to-end latency (ms)
+    throughput_mbps        = Column(Float, nullable=True)  # Representative client L4 throughput (Mbps)
+
+    # Iteration 4 Extension: Sensing Radio Snapshot
+    spectrum_snapshot = Column(JSON, nullable=True)  # JSON serialization of sensing radio report
 
     def __repr__(self):
         return f"<Telemetry ap_id={self.ap_id} timestamp={self.timestamp} channel={self.channel}>"

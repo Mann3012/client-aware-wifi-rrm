@@ -134,92 +134,124 @@ class TelemetrySimulator:
 
         # Base noise floor (thermal)
         base_noise_dbm = self.receiver.thermal_noise_floor_dbm(self.ap.channel_width * 1e6)
-        
+
         total_rssi, total_snr, total_retry, total_dist, total_wall_loss = 0.0, 0.0, 0.0, 0.0, 0.0
         total_airtime_us = 0.0
         total_qoe_score = 0.0
         total_noise_floor_mw = 0.0
-        
+
+        # Per-client snapshots — used to select the representative client.
+        # Arithmetic averaging of dB-domain metrics (path loss, SINR, received
+        # power) is not physically meaningful because dB values are log-scale.
+        # Instead, the representative client (nearest to avg distance) provides
+        # a single, internally consistent link snapshot for causal chain display.
+        client_records = []
+
         # For simplicity, we assume an equal fair-share medium access in this iteration
         # P(collision) increases with client count
         collision_prob = min(0.40, client_count * 0.02)
-        
+
         # Calculate per-client physics
         for client in clients:
             client_loc = Point(client.x, client.y)
             dist = self.ap_loc.distance_to(client_loc)
-            
+
             # 1. Propagation & Channel (Downlink)
             pl_db = self.prop_engine.total_path_loss(self.ap_loc, client_loc, self.ap.freq_mhz * 1e6, path_loss_exponent=3.0)
             is_los = (pl_db == self.prop_engine.log_distance_path_loss(dist, self.ap.freq_mhz * 1e6, 3.0))
-            
+
             total_loss_db, shadow_db, fast_fade_db = self.channel_model.apply_channel_effects(
                 pl_db, is_los=is_los, shadow_std_dev_db=4.0, k_factor_db=6.0
             )
-            
+
             # 2. Receiver & Interference
+            # measured_rssi uses total_loss_db (incl. shadow/fast fading) — authoritative value
             rssi_dbm = self.receiver.compute_rssi(self.ap.tx_power_dbm, self.ap.antenna_gain_dbi, client.antenna_gain_dbi, total_loss_db)
-            
+
+            # estimated_rx_power uses pl_db (deterministic path loss only, no fading)
+            # This is the link-budget prediction: TX + Gains - PropagationLoss
+            estimated_rx_power_dbm = self.receiver.compute_rssi(
+                self.ap.tx_power_dbm, self.ap.antenna_gain_dbi, client.antenna_gain_dbi, pl_db
+            )
+
             intf_powers = self.interference_engine.compute_external_interference(client_loc, self.ap.freq_mhz, float(self.ap.channel_width))
             sinr_db = self.receiver.compute_sinr(rssi_dbm, base_noise_dbm, intf_powers)
             snr_db = self.receiver.compute_snr(rssi_dbm, base_noise_dbm)
-            
+
             # Sum measured noise power (thermal noise + interference)
             from src.realistic_simulator.constants import dbm_to_mw
             total_noise_floor_mw += dbm_to_mw(base_noise_dbm) + sum(dbm_to_mw(p) for p in intf_powers)
-            
+
             # 3. PHY / Link Adaptation
             mcs = self.link_adaptation.select_mcs(sinr_db)
             spatial_streams = self.link_adaptation.select_spatial_streams(sinr_db, self.ap.spatial_streams, 2)
-            
+
             phy = WiFi6Phy(self.ap.channel_width, spatial_streams, self.ap.guard_interval_us)
             phy_res = phy.compute(sinr_db, mcs)
-            
+
             # 4. MAC Layer
             # Assume average packet size 1500, aggregation 32 frames for heavy traffic, 1 for light
             agg_frames = 32 if client.demand_mbps > 5.0 else 1
             mac_res = self.mac_layer.compute_transmission_time(1500, phy_res, collision_prob, agg_frames)
-            
+
             # 5. Traffic Model & QoE
             demand_mult = scenario.client_demand_multiplier if scenario else 1.0
             actual_demand = client.demand_mbps * demand_mult
-            
+
             traffic_res = self.traffic_model.evaluate_traffic(actual_demand, phy_res, mac_res)
-            
-            # Aggregate metrics for this client
+
+            # Aggregate network-wide metrics (averaging is appropriate for these)
             total_rssi += rssi_dbm
             total_snr += snr_db
             total_retry += phy_res.per
             total_dist += dist
             total_wall_loss += (pl_db - self.prop_engine.log_distance_path_loss(dist, self.ap.freq_mhz * 1e6, 3.0))
-            
+
             # Airtime consumed = fraction of 1 second needed to transmit throughput
             if mac_res.effective_throughput_mbps > 0:
                 total_airtime_us += (traffic_res.l4_throughput_mbps / mac_res.effective_throughput_mbps) * 1e6
-                
+
             qoe = self.qoe_engine.compute_qoe(
                 client.application_type, traffic_res.l4_throughput_mbps, actual_demand,
                 traffic_res.latency_ms, traffic_res.jitter_ms, phy_res.per, phy_res.per
             )
             total_qoe_score += qoe.score
-            
-        # Averages
-        avg_rssi = total_rssi / client_count
-        avg_snr = total_snr / client_count
-        avg_retry = total_retry / client_count
-        avg_dist = total_dist / client_count
+
+            # Snapshot this client's per-link metrics for representative selection
+            client_records.append({
+                "dist":                   dist,
+                "path_loss_db":           pl_db,
+                "estimated_rx_power_dbm": estimated_rx_power_dbm,
+                "sinr_db":                sinr_db,
+                "mcs_index":              phy_res.mcs_index,
+                "phy_rate_mbps":          phy_res.phy_rate_mbps,
+                "latency_ms":             traffic_res.latency_ms,
+                "throughput_mbps":        traffic_res.l4_throughput_mbps,
+            })
+
+        # ── Network-wide averages ─────────────────────────────────────────────
+        avg_rssi      = total_rssi / client_count
+        avg_snr       = total_snr / client_count
+        avg_retry     = total_retry / client_count
+        avg_dist      = total_dist / client_count
         avg_wall_loss = total_wall_loss / client_count
         avg_qoe_score = total_qoe_score / client_count
-        
+
         from src.realistic_simulator.constants import mw_to_dbm
         avg_noise_floor = mw_to_dbm(total_noise_floor_mw / client_count)
-        
+
         # Total airtime utilization (%)
         airtime_utilization = min(100.0, (total_airtime_us / 1e6) * 100.0)
-        
+
+        # ── Representative-client selection ───────────────────────────────────
+        # Select the client whose distance is nearest to avg_dist.
+        # All per-link dB-domain metrics come from this single client link,
+        # preserving internal consistency across the causal chain.
+        rep = min(client_records, key=lambda c: abs(c["dist"] - avg_dist))
+
         qoe_cat = self.qoe_engine.get_category(avg_qoe_score)
         has_active_interference = (scenario is not None and scenario.interference is not None and scenario.interference.active)
-        
+
         # Recommendations Engine (Legacy compatibility)
         recommendations = RecommendationEngine.recommend_action(
             scenario_name=scenario.name if scenario else "Normal Office",
@@ -233,7 +265,7 @@ class TelemetrySimulator:
             rssi=avg_rssi,
             client_count=client_count
         )
-        
+
         # --- Sensing Radio Scan (Iteration 4) ---
         sensing_report = self.sensing_radio.scan(
             channel=self.ap.channel,
@@ -241,8 +273,9 @@ class TelemetrySimulator:
             environment=self.env,
             ap_location=self.ap_loc,
         )
-        
+
         return TelemetryRecord(
+            # ── Network-wide fields ──────────────────────────────────────────
             ap_id=self.ap.ap_id, channel=self.ap.channel, client_count=client_count,
             rssi=avg_rssi, noise_floor=avg_noise_floor, snr=avg_snr,
             airtime_utilization=airtime_utilization, retry_rate=avg_retry,
@@ -251,9 +284,18 @@ class TelemetrySimulator:
             distance=avg_dist, freq_mhz=self.ap.freq_mhz, tx_power=self.ap.tx_power_dbm,
             wall_count=int(avg_wall_loss / 3.0), wall_loss=avg_wall_loss,
             recommendations=recommendations,
-            # Pass new physics fields back to the orchestrator if needed
-            sinr=avg_snr,
+            # ── Representative-client per-link fields ────────────────────────
+            path_loss_db=rep["path_loss_db"],
+            estimated_rx_power_dbm=rep["estimated_rx_power_dbm"],
+            sinr_db=rep["sinr_db"],
+            mcs_index=rep["mcs_index"],
+            phy_rate_mbps=rep["phy_rate_mbps"],
+            latency_ms=rep["latency_ms"],
+            throughput_mbps=rep["throughput_mbps"],
+            # ── Legacy alias fields (backward compatibility) ─────────────────
+            sinr=rep["sinr_db"],   # Fixed: was incorrectly set to avg_snr
             per=avg_retry,
-            # Sensing radio data (Iteration 4)
+            # ── Sensing Radio (Iteration 4) ──────────────────────────────────
             sensing_report=sensing_report.to_dict() if sensing_report else None,
         )
+

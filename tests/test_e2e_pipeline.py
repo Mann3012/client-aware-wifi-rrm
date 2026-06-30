@@ -72,7 +72,14 @@ class TestRRMSystemE2EPipeline(unittest.TestCase):
             tx_power=sim_record.tx_power,
             wall_count=sim_record.wall_count,
             wall_loss=sim_record.wall_loss,
-            scenario_name=scenario.name
+            scenario_name=scenario.name,
+            path_loss_db=sim_record.path_loss_db,
+            estimated_rx_power_dbm=sim_record.estimated_rx_power_dbm,
+            sinr_db=sim_record.sinr_db,
+            mcs_index=sim_record.mcs_index,
+            phy_rate_mbps=sim_record.phy_rate_mbps,
+            latency_ms=sim_record.latency_ms,
+            throughput_mbps=sim_record.throughput_mbps
         )
         self.db.add(db_telemetry)
         self.db.commit()
@@ -105,6 +112,55 @@ class TestRRMSystemE2EPipeline(unittest.TestCase):
         self.assertTrue(len(recs_api) > 0)
         self.assertEqual(recs_api[0].action, "CHANNEL_CHANGE")
         self.assertEqual(recs_api[0].root_cause, "MICROWAVE")
+
+    def test_pipeline_field_consistency(self):
+        """
+        Verifies that per-link physics metrics flow end-to-end without loss
+        or silent derivation in the presentation layer.
+        """
+        scenario = ScenarioEngine.get_scenario("Normal Office")
+        
+        # 1. Generate
+        sim_record = self.simulator.generate_telemetry(self.clients, scenario)
+        
+        # 2. Persist
+        db_telemetry = Telemetry(
+            timestamp=datetime.datetime.utcnow(),
+            ap_id=sim_record.ap_id,
+            channel=sim_record.channel,
+            rssi=sim_record.rssi,
+            snr=sim_record.snr,
+            noise_floor=sim_record.noise_floor,
+            airtime_utilization=sim_record.airtime_utilization,
+            retry_rate=sim_record.retry_rate,
+            client_count=sim_record.client_count,
+            path_loss_db=sim_record.path_loss_db,
+            estimated_rx_power_dbm=sim_record.estimated_rx_power_dbm,
+            sinr_db=sim_record.sinr_db,
+            mcs_index=sim_record.mcs_index,
+            phy_rate_mbps=sim_record.phy_rate_mbps,
+            latency_ms=sim_record.latency_ms,
+            throughput_mbps=sim_record.throughput_mbps
+        )
+        self.db.add(db_telemetry)
+        self.db.commit()
+
+        # 3. Retrieve
+        telemetry_api = get_telemetry(ap_id="AP_E2E_01", limit=1, db=self.db)
+        
+        # 4. Verify fields exist and match exactly (Pipeline Invariant)
+        api_record = telemetry_api[0]
+        
+        self.assertIsNotNone(api_record.path_loss_db)
+        self.assertIsNotNone(api_record.estimated_rx_power_dbm)
+        self.assertIsNotNone(api_record.sinr_db)
+        self.assertIsNotNone(api_record.latency_ms)
+        self.assertIsNotNone(api_record.throughput_mbps)
+        
+        # Values should be identical
+        self.assertEqual(api_record.path_loss_db, sim_record.path_loss_db)
+        self.assertEqual(api_record.latency_ms, sim_record.latency_ms)
+        self.assertEqual(api_record.throughput_mbps, sim_record.throughput_mbps)
 
 if __name__ == "__main__":
     unittest.main()
