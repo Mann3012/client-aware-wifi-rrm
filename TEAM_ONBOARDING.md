@@ -39,6 +39,7 @@ If you have never worked with wireless networks, here are the key concepts expla
 * **RRM Policy Engine**: Rule-based engine that recommends adjustments and updates simulator states.
 * **Interactive Streamlit Web Dashboard**: Live scorecard, trend charts, alert lists, and manual controls.
 * **Integration Tests**: Tests verifying schema transactions, anomaly alerts, and recommendations.
+* **Diagnostic Engine Refactor**: Decoupled the RRM recommendation generation from the scenario simulator, using raw telemetry to drive dynamic root-cause diagnoses, expected impact analysis, and causal string generation (`executive_summary.py`).
 
 ### Mid-Term Deliverables (In Progress / Next Steps)
 * **Bayesian Optimizer**: Tuning detection and policy thresholds to maximize network QoE.
@@ -64,23 +65,29 @@ run.py (Entry point & process manager)
               │
               └──> src/simulator/generator.py (Background simulator execution worker)
                     │
-                    └──> src/analytics/change_detection.py (EWMA/CUSUM anomaly logic)
+                    └──> src/realistic_simulator/recommendation_engine.py (Telemetry-driven Diagnostic Engine)
                           │
-                          └──> src/analytics/policy_engine.py (RRM rules logic)
+                          └──> src/realistic_simulator/executive_summary.py (Dynamic causal string generator)
                                 │
-                                └──> src/api/routes.py (REST API endpoint declarations)
+                                └──> src/analytics/change_detection.py (EWMA/CUSUM anomaly logic)
                                       │
-                                      └──> dashboard/app.py (Streamlit dashboard frontend)
+                                      └──> src/analytics/policy_engine.py (RRM rules logic)
+                                            │
+                                            └──> src/api/routes.py (REST API endpoint declarations)
+                                                  │
+                                                  └──> dashboard/app.py (Streamlit dashboard frontend)
 ```
 
 1. **[run.py](file:///c:/Users/l/Desktop/Artista/run.py)**: Start here to see how the FastAPI and Streamlit processes are initialized and monitored.
 2. **[src/database/models.py](file:///c:/Users/l/Desktop/Artista/src/database/models.py)**: Check the definitions of the telemetry, alert, and recommendation tables.
 3. **[src/realistic_simulator/telemetry_simulator.py](file:///c:/Users/l/Desktop/Artista/src/realistic_simulator/telemetry_simulator.py)**: Review the physics-based formulas used to calculate RSSI, SNR, Airtime, and Retry Rates.
 4. **[src/simulator/generator.py](file:///c:/Users/l/Desktop/Artista/src/simulator/generator.py)**: Examine how the background worker updates AP states, runs calculations, triggers alerts, and evaluates policies.
-5. **[src/analytics/change_detection.py](file:///c:/Users/l/Desktop/Artista/src/analytics/change_detection.py)**: Analyze how EWMA and CUSUM check for metrics anomalies.
-6. **[src/analytics/policy_engine.py](file:///c:/Users/l/Desktop/Artista/src/analytics/policy_engine.py)**: Review the rules that map telemetry states and active alerts to recommended adjustments.
-7. **[src/api/routes.py](file:///c:/Users/l/Desktop/Artista/src/api/routes.py)**: See how data is retrieved from the database and served to client requests.
-8. **[dashboard/app.py](file:///c:/Users/l/Desktop/Artista/dashboard/app.py)**: Understand how the Streamlit frontend visualizes data and coordinates controls.
+5. **[src/realistic_simulator/recommendation_engine.py](file:///c:/Users/l/Desktop/Artista/src/realistic_simulator/recommendation_engine.py)**: Read the `DiagnosticEngine` class to see how telemetry variables are evaluated against thresholds to infer root causes. This decoupling ensures diagnosis depends entirely on data, not scenarios.
+6. **[src/realistic_simulator/executive_summary.py](file:///c:/Users/l/Desktop/Artista/src/realistic_simulator/executive_summary.py)**: Check how the diagnostic results and telemetry data are combined to create human-readable explanations.
+7. **[src/analytics/change_detection.py](file:///c:/Users/l/Desktop/Artista/src/analytics/change_detection.py)**: Analyze how EWMA and CUSUM check for metrics anomalies.
+8. **[src/analytics/policy_engine.py](file:///c:/Users/l/Desktop/Artista/src/analytics/policy_engine.py)**: Review the rules that map telemetry states and active alerts to recommended adjustments.
+9. **[src/api/routes.py](file:///c:/Users/l/Desktop/Artista/src/api/routes.py)**: See how data is retrieved from the database and served to client requests.
+10. **[dashboard/app.py](file:///c:/Users/l/Desktop/Artista/dashboard/app.py)**: Understand how the Streamlit frontend visualizes data and coordinates controls.
 
 ---
 
@@ -92,6 +99,8 @@ run.py (Entry point & process manager)
 | **[src/database/models.py](file:///c:/Users/l/Desktop/Artista/src/database/models.py)** | Database tables | Defines the schema for persistent network logs. |
 | **[src/simulator/generator.py](file:///c:/Users/l/Desktop/Artista/src/simulator/generator.py)** | Simulation manager | Runs the background simulation loop and orchestrates analytics. |
 | **[src/realistic_simulator/telemetry_simulator.py](file:///c:/Users/l/Desktop/Artista/src/realistic_simulator/telemetry_simulator.py)** | Physics engine | Implements standard network path loss and capacity equations. |
+| **[src/realistic_simulator/recommendation_engine.py](file:///c:/Users/l/Desktop/Artista/src/realistic_simulator/recommendation_engine.py)** | Diagnostic Engine | Evaluates raw telemetry dynamically to categorize interference, congestion, and coverage. |
+| **[src/realistic_simulator/executive_summary.py](file:///c:/Users/l/Desktop/Artista/src/realistic_simulator/executive_summary.py)** | Summary Generator | Generates dynamic causal strings for the frontend dashboards. |
 | **[src/analytics/change_detection.py](file:///c:/Users/l/Desktop/Artista/src/analytics/change_detection.py)** | Anomaly engine | Detects metric shifts (CUSUM) and spikes (EWMA). |
 | **[src/analytics/policy_engine.py](file:///c:/Users/l/Desktop/Artista/src/analytics/policy_engine.py)** | Decision maker | Evaluates states and triggers optimizations like channel changes. |
 | **[dashboard/app.py](file:///c:/Users/l/Desktop/Artista/dashboard/app.py)** | Streamlit frontend | Serves as the interactive web console. |

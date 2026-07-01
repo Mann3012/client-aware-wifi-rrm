@@ -80,22 +80,31 @@ The diagram below represents the causal network physics and evaluation pipeline 
                            |
                            | (Applies Metric Penalties)
                            v
-              +--------------------------+
-              |        QoE Score         |
-              +------------+-------------+
-                           |
-                           v
-  +--------------------------------------------------+
-  |              Recommendation Engine               |
-  |  Evaluates physical parameters and rule matrices |
-  |  to determine RRM adjustments (e.g., width, tx) |
-  +------------------------+-------------------------+
-                           |
-                           | (Saved to DB / Rest APIs)
-                           v
-              +--------------------------+
-              |   Streamlit Dashboard    |
-              +--------------------------+
+               +--------------------------+
+               |        QoE Score         |
+               +------------+-------------+
+                            |
+                            | (Feature Extraction)
+                            v
+   +--------------------------------------------------+
+   |               Diagnostic Engine                  |
+   | Evaluates raw telemetry against thresholds to    |
+   | generate ranked diagnoses with confidence levels.|
+   +------------------------+-------------------------+
+                            |
+                            | (Yields Ranked Diagnoses)
+                            v
+   +--------------------------------------------------+
+   |              Recommendation Engine               |
+   | Formats diagnoses and associates mitigation      |
+   | actions with expected QoE and retry improvements.|
+   +------------------------+-------------------------+
+                            |
+                            | (Saved to DB / Rest APIs)
+                            v
+               +--------------------------+
+               |   Streamlit Dashboard    |
+               +--------------------------+
 ```
 
 ---
@@ -126,10 +135,11 @@ The project is structured into six major components:
 * **Path**: [src/simulator/generator.py](file:///c:/Users/l/Desktop/Artista/src/simulator/generator.py)
 * **Function**: Runs a daemon thread that steps every $N$ seconds. In realistic mode, it simulates AP and client configurations; in legacy mode, it uses statistical distributions and can scrape Windows system wireless metrics using `netsh wlan show interfaces`.
 
-### 5. Recommendation Engine
-* **Path**: [src/realistic_simulator/recommendation_engine.py](file:///c:/Users/l/Desktop/Artista/src/realistic_simulator/recommendation_engine.py), [src/analytics/policy_engine.py](file:///c:/Users/l/Desktop/Artista/src/analytics/policy_engine.py)
-* **Function**: Consists of two engines:
-  * **Causal Recommendation Engine**: Evaluates current physical conditions (distance, SNR, utilization, active interference) to generate immediate actions.
+### 5. Diagnostic Engine & Analytics
+* **Path**: [src/realistic_simulator/recommendation_engine.py](file:///c:/Users/l/Desktop/Artista/src/realistic_simulator/recommendation_engine.py), [src/realistic_simulator/executive_summary.py](file:///c:/Users/l/Desktop/Artista/src/realistic_simulator/executive_summary.py), [src/analytics/policy_engine.py](file:///c:/Users/l/Desktop/Artista/src/analytics/policy_engine.py)
+* **Function**: Decouples network evaluation from simulation state:
+  * **Diagnostic Engine**: Evaluates raw telemetry metrics directly (e.g., path loss, airtime, retry rates) independent of the underlying scenario. It infers root causes and computes dynamic expected impacts (expected QoE gain and retry reduction).
+  * **Executive Summary Generator**: Dynamically generates causal string reports based on telemetry combinations and diagnoses.
   * **Rule-Based Policy Engine**: Evaluates active statistical alerts to recommend actions, feeding channel adjustments back into simulator state.
 
 ### 6. Analytics Engine

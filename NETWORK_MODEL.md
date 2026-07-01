@@ -74,7 +74,7 @@ By replacing randomized variables with this deterministic chain, the simulation 
 
 ---
 
-## 5. Quality of Experience (QoE) & RRM Engine
+## 5. Quality of Experience (QoE) & Diagnostic Engine
 
 ### Quality of Experience (QoE) Model
 - **Formula:** `QoE = (0.40 * SNRScore) + (0.30 * RetryScore) + (0.20 * NoiseScore) + (0.10 * ClientLoadScore)`
@@ -82,9 +82,17 @@ By replacing randomized variables with this deterministic chain, the simulation 
   - Each metric score is normalized to a 0-100 scale.
   - QoE represents an engineering heuristic mapping physical Layer 1/2 performance to expected User Experience.
 
-### Radio Resource Management (RRM) Recommendation Engine
-- **Behavior:** Scans normalized telemetry metrics and explicit active events to generate a **ranked array** of mitigation actions.
-- **Example Rules:**
-  - `SNR < 25` & `Interference Active` ➔ `CHANNEL_CHANGE`
-  - `Distance > 20m` & `SNR < 20` ➔ `POWER_INCREASE`
-- **Output Structure:** `[{"action": "...", "confidence": 0.91, "expected_qoe_gain": 18.0}]`
+### Diagnostic Engine
+- **Behavior:** The engine dynamically analyzes telemetry variables to detect the root cause of degradation and assigns confidence levels based on threshold violations.
+- **Diagnosis Thresholds:**
+  - `coverage_path_loss` (90.0 dB): Exceeding this flags Coverage issues.
+  - `airtime_congestion` (70.0%): Exceeding this (with high client counts) flags Client Congestion.
+  - `microwave_noise` (-85.0 dBm): Exceeding this (non-neighbor) flags Broadband Noise.
+  - `bluetooth_retry` (10%): Exceeding this (with BLE interference type) flags Bluetooth collisions.
+- **Dynamic Expected Impact:**
+  - `expected_qoe_gain` scales based on the gap between current QoE and a healthy baseline (`80.0`).
+  - `expected_retry_reduction` scales proportionally with the current `retry_rate`.
+- **Example Diagnosis logic:**
+  - `Noise Floor >= -85dBm` & `Interference != Neighbor AP` ➔ `Microwave Interference` (Action: `CHANNEL_CHANGE`)
+  - `Path Loss > 90dB` & `Retry Rate > 15%` ➔ `Coverage Problem` (Action: `POWER_INCREASE`)
+- **Output Structure:** `[{"root_cause": "Microwave Interference", "action": "CHANNEL_CHANGE", "confidence": 0.95, "expected_qoe_gain": 20.0, "expected_retry_reduction": 15.0}]`

@@ -62,7 +62,7 @@ The prototype is **fully operational** as a Digital Twin simulator. It features:
   * **Auto Mode**: Randomly selects a new scenario after each duration expires.
   * **Manual Mode**: Scenarios are set via API or dashboard dropdown — useful during judging.
 * **Physics-Backed Telemetry**: Uses Log-Distance Path Loss, capacity-based airtime, exponential retry rate, and weighted QoE scoring.
-* **Ranked Recommendations**: Each recommendation includes `action`, `confidence`, `root_cause`, `expected_qoe_gain`, and a multiline causal chain explanation.
+* **Telemetry-Driven Diagnosis**: Replaces the older static recommendation engine. Each diagnosis evaluates raw telemetry dynamically to include `action`, `confidence`, `root_cause`, `expected_qoe_gain`, `expected_retry_reduction`, and a dynamically generated executive summary.
 * **Scenario Event Log**: Tracks every scenario transition with start/end times, root cause, and recommendation triggered — enabling a visual timeline.
 * **Root Cause Analysis Panel**: Dashboard panel showing the full causal chain from scenario → noise → SNR → retry → QoE → recommendation.
 * **Topology Visualization**: Displays AP and client positions on a scatter plot, updated per scenario transition.
@@ -77,6 +77,35 @@ The prototype is **fully operational** as a Digital Twin simulator. It features:
 * **Interactive Streamlit Dashboard**: Renders live scorecards, multi-metric charts, scenario timeline, alert logs, and recommendation interface.
 * **Manual Scenario Selector**: Dropdown in the dashboard to instantly force any scenario on any AP — no waiting required.
 * **Manual Simulation Step**: Button to force an immediate simulation tick from the dashboard during presentations.
+
+### Architecture Refactor: Diagnostic Engine
+
+**Why this refactor?**
+
+Earlier versions directly mapped scenarios to recommendations:
+`Scenario ➔ Recommendation`
+
+This tightly coupled the simulator with the reasoning layer. The new architecture separates simulation, diagnosis, and recommendation into distinct stages:
+`Telemetry ➔ Feature Extraction ➔ Diagnostic Engine ➔ Ranked Diagnoses ➔ Recommendation Engine ➔ Presentation Layer`
+
+This separation has several advantages:
+* **Diagnosis depends only on measured telemetry.**
+* **Simulation scenarios influence telemetry generation but never diagnosis.**
+* **Recommendation becomes independent of scenario names.**
+* **The dashboard simply visualizes the diagnostic output rather than performing its own reasoning.**
+* **New diagnostic rules can be added without modifying the simulator or dashboard.**
+
+**Diagnostic Telemetry Inputs:**
+| Metric | Description | Used For |
+|---|---|---|
+| RSSI | Received Signal Strength | Coverage diagnosis |
+| Path Loss | Signal attenuation | Coverage confidence |
+| Noise Floor | Background RF noise | Microwave detection |
+| Retry Rate | MAC retransmissions | Coverage / Bluetooth / Microwave |
+| Airtime Utilization | Channel occupancy | Congestion detection |
+| Client Count | Number of active clients | Congestion diagnosis |
+| QoE Score | User experience metric | Severity estimation |
+| Interference Type | Simulated interference source | Candidate categorization |
 
 ---
 
@@ -116,8 +145,9 @@ Artista/
 │   │   └── models.py                # SQLAlchemy DB models (Telemetry, Alert, Recommendation, ScenarioEvent)
 │   │
 │   ├── realistic_simulator/
+│   │   ├── executive_summary.py     # Dynamic causal string generator
 │   │   ├── models.py                # Dataclasses (APState, ClientState, QoE, InterferenceEvent, TelemetryRecord)
-│   │   ├── recommendation_engine.py # Ranked recommendation engine with causal heuristics
+│   │   ├── recommendation_engine.py # Telemetry-driven diagnostic engine
 │   │   ├── scenario_engine.py       # Scenario definitions and transition logic
 │   │   └── telemetry_simulator.py   # Physics engine (path loss, SNR, retry rate, QoE)
 │   │
@@ -344,6 +374,7 @@ Stores ranked optimization events suggested by the policy engine.
 * `root_cause` (String, Nullable): Explicit root cause label (e.g., `MICROWAVE_INTERFERENCE`, `CLIENT_CONGESTION`).
 * `reason` (String): Multiline causal chain explanation.
 * `expected_qoe_gain` (Float, Nullable): Expected QoE improvement if the action is taken.
+* `expected_retry_reduction` (Float, Nullable): Expected percentage reduction in retry rates.
 
 ---
 
@@ -372,7 +403,7 @@ Retry Rate: 1% → 30% (exponential: retry = min(80, max(1, 100 × e^(−0.12 ×
     ↓
 QoE: 95 → 35 (penalties for low SNR, high retry rate)
     ↓
-Recommendation: CHANNEL_CHANGE (confidence: 0.95, expected QoE gain: +20)
+Recommendation: CHANNEL_CHANGE (confidence: 0.95, expected QoE gain: +20, expected retry reduction: -15%)
 ```
 
 ---
