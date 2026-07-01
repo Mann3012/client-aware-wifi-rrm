@@ -103,6 +103,7 @@ class Recommendation(Base):
     root_cause = Column(String(100), nullable=True)          # Explicit root cause (e.g. "MICROWAVE_INTERFERENCE")
     reason = Column(String(1000), nullable=False)            # Descriptive reason explaining the recommendation (Multiline Causal Chain)
     expected_qoe_gain = Column(Float, nullable=True)         # Expected QoE increase if action is taken
+    expected_retry_reduction = Column(Float, nullable=True)  # Expected retry rate reduction if action is taken
 
     def __repr__(self):
         return f"<Recommendation ap_id={self.ap_id} action={self.action} recommended_value={self.recommended_value}>"

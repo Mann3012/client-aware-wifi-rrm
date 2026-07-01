@@ -303,7 +303,8 @@ class BackgroundSimulator:
                         confidence=rec_data["confidence"],
                         root_cause=rec_data.get("root_cause", scenario.interference_type),
                         reason=rec_data["reason"],
-                        expected_qoe_gain=rec_data.get("expected_qoe_gain", 0.0)
+                        expected_qoe_gain=rec_data.get("expected_qoe_gain", 0.0),
+                        expected_retry_reduction=rec_data.get("expected_retry_reduction", 0.0)
                     )
                     db.add(rec_obj)
                     

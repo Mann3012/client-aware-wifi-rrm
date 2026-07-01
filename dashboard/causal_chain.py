@@ -84,92 +84,30 @@ def format_root_cause_label(root_cause: Optional[str]) -> str:
     return root_cause.replace("_", " ").title()
 
 
-def derive_root_cause_ranked(
-    rssi, snr, noise_floor, retry_rate, airtime_frac, int_type, distance_m,
-    rec_root_cause: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    """
-    Ranked root causes. When recommendation engine provides root_cause, it
-    receives highest priority with recommendation confidence applied later.
-    """
-    causes: List[Dict[str, Any]] = []
-
-    if rec_root_cause and rec_root_cause not in ("NONE", "None", ""):
-        label = format_root_cause_label(rec_root_cause)
-        if "MICROWAVE" in rec_root_cause.upper():
-            causes.append({"label": f"Interference ({normalize_interference_label('MICROWAVE')})",
-                           "conf": 0.95, "reason": "Broadband RF noise emission detected by recommendation engine."})
-        elif "BLE" in rec_root_cause.upper() or "BLUETOOTH" in rec_root_cause.upper():
-            causes.append({"label": "Interference (Bluetooth)",
-                           "conf": 0.95, "reason": "Bursty non-WiFi interference detected; overlaps with Wi-Fi frames."})
-        elif "NEIGHBOR" in rec_root_cause.upper() or "CO_CHANNEL" in rec_root_cause.upper():
-            causes.append({"label": "Co-Channel Contention (Neighbor AP)",
-                           "conf": 0.93, "reason": "Neighbor AP traffic increases contention and airtime competition."})
-        elif "CONGESTION" in rec_root_cause.upper():
-            causes.append({"label": "Congestion (High Density)",
-                           "conf": 0.94, "reason": "Channel is heavily utilized by active traffic, causing medium contention."})
-        elif "WEAK" in rec_root_cause.upper() or "COVERAGE" in rec_root_cause.upper():
-            causes.append({"label": "Coverage (Distance + Path Loss)",
-                           "conf": 0.90, "reason": "Weak signal due to propagation distance and path loss."})
-        else:
-            causes.append({"label": label, "conf": 0.90,
-                           "reason": f"Recommendation engine identified root cause: {label}."})
-
-    if interference_matches(int_type, "bluetooth", "ble"):
-        causes.append({"label": "Interference (Bluetooth)", "conf": 0.95,
-                       "reason": "Bursty non-WiFi interference detected; overlaps with Wi-Fi frames."})
-    elif interference_matches(int_type, "microwave"):
-        causes.append({"label": "Interference (Microwave)", "conf": 0.95,
-                       "reason": "Broadband RF noise emission detected."})
-    elif interference_matches(int_type, "neighbor", "co_channel"):
-        causes.append({"label": "Co-Channel Contention (Neighbor AP)", "conf": 0.92,
-                       "reason": "Neighbor AP traffic increases contention and airtime competition."})
-    elif int_type and int_type not in ("None", "none", ""):
-        causes.append({"label": f"Interference ({normalize_interference_label(int_type)})", "conf": 0.90,
-                       "reason": "Active non-WiFi interference detected."})
-    elif noise_floor is not None and noise_floor >= -90:
-        causes.append({"label": "Interference (Elevated Noise)", "conf": 0.85,
-                       "reason": "Elevated noise floor independent of client traffic."})
+def build_dynamic_causal_chain(root_cause: str, action: str, telemetry: dict) -> str:
+    def _cv(v, d=1, s=""): return f"{round(float(v),d)}{s}" if v is not None else "—"
+    
+    path_loss_db = telemetry.get("path_loss_db")
+    rssi_dbm = telemetry.get("rssi")
+    snr_db = telemetry.get("snr")
+    retry_pct = round((telemetry.get("retry_rate", 0) or 0) * 100, 1)
+    qoe_score = telemetry.get("qoe_score")
+    airtime_pct = round((telemetry.get("airtime_utilization", 0) or 0) * 100, 1)
+    
+    if "Coverage" in root_cause:
+        flow = f"Distance & Obstacles\n&darr;\nHigh Path Loss ({_cv(path_loss_db, 1, ' dB')})\n&darr;\nWeak Received Signal ({_cv(rssi_dbm, 1, ' dBm')})\n&darr;\nReduced SNR ({_cv(snr_db, 1, ' dB')})\n&darr;\nLower MCS\n&darr;\nRetransmissions ({retry_pct}%)\n&darr;\nThroughput Loss\n&darr;\n{action} Recommended"
+    elif "Bluetooth" in root_cause:
+        flow = f"Bluetooth Activity\n&darr;\nBurst RF Interference\n&darr;\nFrame Collisions\n&darr;\nRetransmissions ({retry_pct}%)\n&darr;\nReduced Efficiency\n&darr;\n{action} Recommended"
+    elif "Microwave" in root_cause:
+        flow = f"Microwave Emissions\n&darr;\nBroadband RF Noise\n&darr;\nPacket Corruption\n&darr;\nRetransmissions ({retry_pct}%)\n&darr;\nThroughput Reduction\n&darr;\n{action} Recommended"
+    elif "Neighbor" in root_cause or "Co-Channel" in root_cause:
+        flow = f"Neighbor AP Activity\n&darr;\nCo-channel Contention\n&darr;\nAirtime Competition\n&darr;\nRetransmissions ({retry_pct}%)\n&darr;\nReduced Capacity\n&darr;\n{action} Recommended"
+    elif "Congestion" in root_cause:
+        flow = f"High Client Density\n&darr;\nAirtime Saturation ({airtime_pct}%)\n&darr;\nChannel Contention\n&darr;\nCollision Probability\n&darr;\nBackoff Delays\n&darr;\nRetransmissions ({retry_pct}%)\n&darr;\nLatency Increase & QoE Reduction\n&darr;\n{action} Recommended"
     else:
-        causes.append({"label": "Interference", "conf": 0.15,
-                       "reason": "Noise floor is clean at the AP."})
+        flow = f"Optimal Environmental Conditions\n&darr;\nHealthy Signal Quality\n&darr;\nNominal Retransmissions\n&darr;\nStrong User QoE ({_cv(qoe_score, 1, '/100')})\n&darr;\nNo Action Required"
 
-    if rssi is not None and rssi < -78:
-        if distance_m is not None and distance_m > 20:
-            causes.append({"label": "Coverage (Distance + Path Loss)", "conf": 0.90,
-                           "reason": "Weak signal due to propagation distance and path loss."})
-        else:
-            causes.append({"label": "Coverage (Weak Signal)", "conf": 0.88,
-                           "reason": "Weak signal despite proximity (possible obstruction)."})
-    else:
-        causes.append({"label": "Coverage", "conf": 0.18,
-                       "reason": "RSSI remains strong, suggesting adequate signal propagation."})
-
-    if airtime_frac is not None and airtime_frac > 0.75:
-        causes.append({"label": "Congestion (High Density)", "conf": 0.93,
-                       "reason": "Channel is heavily utilized by active traffic, causing medium contention."})
-    else:
-        causes.append({"label": "Congestion", "conf": 0.20,
-                       "reason": "Airtime utilization is nominal, indicating no channel saturation."})
-
-    # Deduplicate by label, keep highest confidence
-    seen: Dict[str, Dict] = {}
-    for c in causes:
-        key = c["label"]
-        if key not in seen or c["conf"] > seen[key]["conf"]:
-            seen[key] = c
-    causes = sorted(seen.values(), key=lambda x: x["conf"], reverse=True)
-
-    if causes[0]["conf"] < 0.50:
-        causes.insert(0, {"label": "System Optimal", "conf": 0.99,
-                         "reason": "All metrics are within healthy nominal parameters."})
-
-    return causes
-
-
-def derive_root_cause(rssi, snr, noise_floor, retry_rate, airtime_frac, int_type, distance_m):
-    ranked = derive_root_cause_ranked(rssi, snr, noise_floor, retry_rate, airtime_frac, int_type, distance_m)
-    return ranked[0]["label"], ranked[0]["conf"]
+    return flow
 
 
 def build_justification_text(

@@ -56,16 +56,26 @@ class TelemetrySimulator:
         
         if scenario and scenario.interference and scenario.interference.active:
             # Simple heuristic mapping for legacy scenarios
-            if scenario.interference.event_type.lower() == "microwave":
+            evt = scenario.interference.event_type.lower()
+            if evt == "microwave":
                 intf_type = InterferenceType.MICROWAVE
                 bw = 20.0
                 dc = 0.50
                 freq = self.ap.freq_mhz
-            else:
+                tx_power = 10.0
+            elif evt == "ble" or evt == "bluetooth" or evt == "bluetooth storm":
                 intf_type = InterferenceType.BLUETOOTH
                 bw = 2.0
                 dc = 0.05
                 freq = self.ap.freq_mhz
+                tx_power = 10.0
+            else:
+                intf_type = InterferenceType.NEIGHBOR_AP
+                bw = float(self.ap.channel_width)
+                dc = scenario.interference.airtime_boost_percent / 100.0 if scenario.interference.airtime_boost_percent > 0 else 0.25
+                freq = self.ap.freq_mhz
+                # Tuning tx power to achieve approx -85dBm received interference at 7m
+                tx_power = -15.0
                 
             src = InterferenceSource(
                 source_id="scenario_intf",
@@ -73,7 +83,7 @@ class TelemetrySimulator:
                 location=Point(self.ap_loc.x + 5.0, self.ap_loc.y + 5.0), # 5m away
                 frequency_mhz=freq,
                 bandwidth_mhz=bw,
-                tx_power_dbm=10.0,
+                tx_power_dbm=tx_power,
                 duty_cycle=dc
             )
             self.env.interference_sources.append(src)
@@ -240,8 +250,13 @@ class TelemetrySimulator:
         from src.realistic_simulator.constants import mw_to_dbm
         avg_noise_floor = mw_to_dbm(total_noise_floor_mw / client_count)
 
+        has_active_interference = (scenario is not None and scenario.interference is not None and scenario.interference.active)
+
         # Total airtime utilization (%)
-        airtime_utilization = min(100.0, (total_airtime_us / 1e6) * 100.0)
+        base_airtime = (total_airtime_us / 1e6) * 100.0
+        if has_active_interference and scenario.interference.airtime_boost_percent > 0:
+            base_airtime += scenario.interference.airtime_boost_percent
+        airtime_utilization = min(100.0, base_airtime)
 
         # ── Representative-client selection ───────────────────────────────────
         # Select the client whose distance is nearest to avg_dist.
@@ -250,20 +265,21 @@ class TelemetrySimulator:
         rep = min(client_records, key=lambda c: abs(c["dist"] - avg_dist))
 
         qoe_cat = self.qoe_engine.get_category(avg_qoe_score)
-        has_active_interference = (scenario is not None and scenario.interference is not None and scenario.interference.active)
 
         # Recommendations Engine (Legacy compatibility)
         recommendations = RecommendationEngine.recommend_action(
+            path_loss_db=rep["path_loss_db"],
+            interference_type=scenario.interference_type if scenario else "None",
+            noise_floor=avg_noise_floor,
+            retry_rate=avg_retry,
+            qoe_score=avg_qoe_score,
+            airtime_utilization=airtime_utilization,
+            client_count=client_count,
+            rssi=avg_rssi,
             scenario_name=scenario.name if scenario else "Normal Office",
             root_cause=scenario.interference_type if scenario else "None",
-            noise_floor=avg_noise_floor,
             snr=avg_snr,
-            retry_rate=avg_retry,
-            airtime_utilization=airtime_utilization,
-            qoe_score=avg_qoe_score,
-            distance_meters=avg_dist,
-            rssi=avg_rssi,
-            client_count=client_count
+            distance_meters=avg_dist
         )
 
         # --- Sensing Radio Scan (Iteration 4) ---

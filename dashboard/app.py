@@ -25,7 +25,11 @@ from dashboard.causal_chain import (
     interference_matches,
     normalize_interference_label,
     parse_spectrum_snapshot,
+    build_dynamic_causal_chain,
 )
+
+from src.realistic_simulator.executive_summary import generate_executive_summary
+from src.realistic_simulator.recommendation_engine import Diagnosis
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -327,7 +331,7 @@ def render_causal_chain_html(latest_row: dict, top_rec: dict, ap_id: str) -> str
 # ─────────────────────────────────────────────────────────────────────────────
 # Main Causal Chain Report - Native Streamlit (NEW)
 # ─────────────────────────────────────────────────────────────────────────────
-def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
+def render_causal_chain_report(latest_row: dict, top_rec: dict, recs: list, ap_id: str):
     """
     Renders the professional NOC incident report using native Streamlit components.
     """
@@ -377,53 +381,34 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
 
     spectrum = parse_spectrum_snapshot(latest_row.get("spectrum_snapshot"))
 
-    if rc_from_rec and rc_from_rec not in ("NONE", "None", ""):
-        dominant_cause = {
-            "label": rc_from_rec.replace("_", " ").title(),
-            "conf": confidence,
-            "reason": rec_reason or "Identified by diagnostic engine."
-        }
-    else:
-        dominant_cause = {
-            "label": "None (Healthy)",
-            "conf": 1.0,
-            "reason": "No anomalies or recommendations detected."
-        }
-    ranked_causes = [dominant_cause]
+    exp_retry_red = (top_rec.get("expected_retry_reduction") or 0) if top_rec else 0
 
-    # Removed estimate_post_action_impact
+    if rc_from_rec and rc_from_rec not in ("NONE", "None", ""):
+        root_cause_str = rc_from_rec.replace("_", " ").title()
+    else:
+        root_cause_str = "Healthy"
+    
+    top_diagnosis = Diagnosis(
+        root_cause=root_cause_str,
+        confidence=confidence,
+        recommendation=action,
+        expected_qoe_gain=exp_gain,
+        expected_retry_reduction=exp_retry_red
+    )
+
+    dominant_cause = {
+        "label": root_cause_str,
+        "conf": confidence,
+        "reason": rec_reason or "Identified by diagnostic engine."
+    }
 
     # SEC 0: Executive Summary
     st.subheader("SECTION 0: EXECUTIVE SUMMARY")
-    if "Coverage" in dominant_cause["label"]:
-        exec_summary = f"Excessive path loss reduced RSSI and SNR. This degradation increased retransmissions ({retry_pct}%) and reduced user QoE ({_cv(qoe_score, 1)}/100)."
-    elif "Bluetooth" in dominant_cause["label"]:
-        exec_summary = f"Intermittent Bluetooth interference increased retransmissions ({retry_pct}%) despite healthy average signal quality, reducing network efficiency and QoE ({_cv(qoe_score, 1)}/100)."
-    elif "Microwave" in dominant_cause["label"]:
-        exec_summary = f"Broadband microwave interference caused packet corruption and retry events ({retry_pct}%), leading to reduced throughput and QoE ({_cv(qoe_score, 1)}/100)."
-    elif "Neighbor" in dominant_cause["label"] or "Co-Channel" in dominant_cause["label"]:
-        exec_summary = f"Neighbor AP traffic increased co-channel contention and reduced available capacity, elevating retries ({retry_pct}%) and lowering QoE ({_cv(qoe_score, 1)}/100)."
-    elif "Congestion" in dominant_cause["label"]:
-        exec_summary = f"Heavy airtime utilization ({airtime_pct}%) increased contention and reduced network efficiency, leading to higher collision probabilities and lower QoE ({_cv(qoe_score, 1)}/100)."
-    else:
-        exec_summary = f"Performance metrics deviated from nominal baselines. This lowered SNR, increased retransmissions ({retry_pct}%), and reduced user QoE ({_cv(qoe_score, 1)}/100)."
-
-    exec_summary += f" The diagnostic engine identified **{dominant_cause['label']}** as the dominant root cause with {int(dominant_cause['conf']*100)}% confidence and recommended **{action}** to mitigate the issue."
+    exec_summary = generate_executive_summary(top_diagnosis, latest_row)
     st.markdown(f"*{exec_summary}*")
     
     st.markdown("#### Causal Chain Summary")
-    if "Coverage" in dominant_cause["label"]:
-        flow = f"Distance & Obstacles\n&darr;\nHigh Path Loss ({_cv(path_loss_db, 1, ' dB')})\n&darr;\nWeak Received Signal ({_cv(rssi_dbm, 1, ' dBm')})\n&darr;\nReduced SNR ({_cv(snr_db, 1, ' dB')})\n&darr;\nLower MCS\n&darr;\nRetransmissions ({retry_pct}%)\n&darr;\nThroughput Loss\n&darr;\n{action} Recommended"
-    elif "Bluetooth" in dominant_cause["label"]:
-        flow = f"Bluetooth Activity\n&darr;\nBurst RF Interference\n&darr;\nFrame Collisions\n&darr;\nRetransmissions ({retry_pct}%)\n&darr;\nReduced Efficiency\n&darr;\n{action} Recommended"
-    elif "Microwave" in dominant_cause["label"]:
-        flow = f"Microwave Emissions\n&darr;\nBroadband RF Noise\n&darr;\nPacket Corruption\n&darr;\nRetransmissions ({retry_pct}%)\n&darr;\nThroughput Reduction\n&darr;\n{action} Recommended"
-    elif "Neighbor" in dominant_cause["label"] or "Co-Channel" in dominant_cause["label"]:
-        flow = f"Neighbor AP Activity\n&darr;\nCo-channel Contention\n&darr;\nAirtime Competition\n&darr;\nRetransmissions ({retry_pct}%)\n&darr;\nReduced Capacity\n&darr;\n{action} Recommended"
-    elif "Congestion" in dominant_cause["label"]:
-        flow = f"High Client Density\n&darr;\nAirtime Saturation ({airtime_pct}%)\n&darr;\nChannel Contention\n&darr;\nCollision Probability\n&darr;\nBackoff Delays\n&darr;\nRetransmissions ({retry_pct}%)\n&darr;\nLatency Increase & QoE Reduction\n&darr;\n{action} Recommended"
-    else:
-        flow = f"Optimal Environmental Conditions\n&darr;\nHealthy Signal Quality\n&darr;\nNominal Retransmissions\n&darr;\nStrong User QoE ({qoe_score:.1f}/100)\n&darr;\nNo Action Required"
+    flow = build_dynamic_causal_chain(root_cause_str, action, latest_row)
     
     st.markdown(f"<div style='text-align: center; font-weight: bold; color: #334155; line-height: 1.8; margin-bottom: 1rem;'>{flow.replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
     st.divider()
@@ -554,50 +539,25 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
 
     # SEC 6: Root Cause Analysis
     st.subheader("SECTION 6: ROOT CAUSE ANALYSIS")
-    st.markdown(f"**Root Cause:** {dominant_cause['label']}")
+    
+    st.markdown("**Ranked Diagnoses:**")
+    if recs:
+        df_recs = []
+        for r in recs:
+            rc = r.get("root_cause", "").replace("_", " ").title() or "Healthy"
+            conf = f"{int(r.get('confidence', 0)*100)}%"
+            act = r.get("action", "NONE")
+            df_recs.append({"Root Cause": rc, "Confidence": conf, "Recommendation": act})
+        st.dataframe(pd.DataFrame(df_recs), hide_index=True, use_container_width=True)
+    else:
+        st.info("No diagnoses available.")
+        
+    st.markdown(f"**Dominant Root Cause:** {dominant_cause['label']}")
     st.markdown(f"**Confidence:** {'High' if dominant_cause['conf'] >= 0.85 else 'Moderate' if dominant_cause['conf'] >= 0.6 else 'Low'}")
     
     st.markdown("**Supporting Evidence:**")
     for ev in dominant_cause['reason'].split(';'):
         st.markdown(f"- ✓ {ev.strip()}")
-        
-    if "Bluetooth" in dominant_cause['label']:
-        st.markdown(f"- ✓ Bluetooth interference signature identified")
-        st.markdown(f"- ✓ Retransmission rate elevated ({retry_pct}%)")
-        st.markdown(f"- ✓ Average RSSI and SNR remain healthy")
-    elif "Microwave" in dominant_cause['label']:
-        st.markdown(f"- ✓ Broadband noise detected ({_cv(noise_dbm, 1, ' dBm')})")
-        st.markdown(f"- ✓ Packet corruption rate increased ({retry_pct}%)")
-    elif "Neighbor" in dominant_cause['label'] or "Co-Channel" in dominant_cause['label']:
-        st.markdown(f"- ✓ Co-channel contention detected from Neighbor AP")
-        st.markdown(f"- ✓ Increased airtime competition ({airtime_pct}%)")
-    elif "Congestion" in dominant_cause['label']:
-        st.markdown(f"- ✓ Airtime utilization extremely high ({airtime_pct}%)")
-        st.markdown(f"- ✓ Channel saturation observed")
-        st.markdown(f"- ✓ Excellent RF signal quality (SNR: {_cv(snr_db, 1, ' dB')})")
-    elif "Coverage" in dominant_cause['label']:
-        st.markdown(f"- ✓ RSSI degraded below -78 dBm ({_cv(rssi_dbm, 1, ' dBm')})")
-        st.markdown(f"- ✓ Path loss significant ({_cv(path_loss_db, 1, ' dB')})")
-        st.markdown(f"- ✓ Noise floor is clean ({_cv(noise_dbm, 1, ' dBm')})")
-        st.markdown(f"- ✓ Airtime is nominal")
-        
-    st.markdown("**Alternative Causes Considered:**")
-    if len(ranked_causes) <= 1:
-        st.caption("No alternative causes were evaluated by the diagnostic engine.")
-    else:
-        for cause in ranked_causes[1:3]:
-            st.markdown(f"*{cause['label']}*")
-            if "Coverage" in cause['label']:
-                st.markdown(f"  - ✗ RSSI is stronger than -65 dBm" if rssi_dbm and rssi_dbm >= -65 else f"  - ✗ RSSI is adequate ({_cv(rssi_dbm, 1, ' dBm')})")
-                st.markdown(f"  - ✗ Excellent SNR ({_cv(snr_db, 1, ' dB')})" if snr_db and snr_db >= 25 else "")
-                st.markdown(f"  - ✗ Coverage symptoms absent")
-            elif "Interference" in cause['label']:
-                st.markdown(f"  - ✗ Noise floor is clean ({_cv(noise_dbm, 1, ' dBm')})" if noise_dbm and noise_dbm < -90 else "  - ✗ Symptoms align better with primary cause")
-            elif "Congestion" in cause['label']:
-                st.markdown(f"  - ✗ Airtime utilization only {airtime_pct}%" if airtime_pct < 75 else "  - ✗ Symptoms align better with primary cause")
-                st.markdown(f"  - ✗ Channel saturation not observed" if airtime_pct < 75 else "")
-            else:
-                st.markdown(f"  - ✗ Evidence does not strongly support this cause")
             
     st.divider()
 
@@ -642,6 +602,7 @@ def render_causal_chain_report(latest_row: dict, top_rec: dict, ap_id: str):
         st.dataframe(df_impact, hide_index=True, use_container_width=True)
         
         st.markdown(f"<br>**Expected QoE Gain:** +{exp_gain:.1f} pts", unsafe_allow_html=True)
+        st.markdown(f"**Expected Retry Reduction:** -{exp_retry_red:.1f}%", unsafe_allow_html=True)
 
     st.divider()
 
@@ -1050,7 +1011,7 @@ if ap_summaries and selected_ap:
                 st.markdown("---")
 
                 # ── FULL CAUSAL CHAIN REPORT ─────────────────────────────
-                render_causal_chain_report(latest_row, top_rec, selected_ap)
+                render_causal_chain_report(latest_row, top_rec, recs, selected_ap)
 
                 st.markdown("---")
 

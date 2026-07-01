@@ -85,6 +85,7 @@ class RecommendationBase(BaseModel):
     root_cause: Optional[str] = None
     reason: str
     expected_qoe_gain: Optional[float] = None
+    expected_retry_reduction: Optional[float] = None
 
 class RecommendationCreate(RecommendationBase):
     pass

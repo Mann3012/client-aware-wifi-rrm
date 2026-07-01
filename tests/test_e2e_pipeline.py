@@ -95,7 +95,8 @@ class TestRRMSystemE2EPipeline(unittest.TestCase):
                 confidence=rec["confidence"],
                 root_cause=rec.get("root_cause", "MICROWAVE_BURST"),
                 reason=rec["reason"],
-                expected_qoe_gain=rec.get("expected_qoe_gain", 0.0)
+                expected_qoe_gain=rec.get("expected_qoe_gain", 0.0),
+                expected_retry_reduction=rec.get("expected_retry_reduction", 0.0)
             )
             self.db.add(db_rec)
         self.db.commit()
@@ -111,7 +112,23 @@ class TestRRMSystemE2EPipeline(unittest.TestCase):
         
         self.assertTrue(len(recs_api) > 0)
         self.assertEqual(recs_api[0].action, "CHANNEL_CHANGE")
-        self.assertEqual(recs_api[0].root_cause, "MICROWAVE")
+        self.assertEqual(recs_api[0].root_cause, "Microwave Interference")
+        self.assertIsNotNone(recs_api[0].expected_retry_reduction)
+        
+    def test_weak_signal_corner_flow(self):
+        """Verifies that the Weak Signal Corner scenario does not result in Healthy diagnosis."""
+        scenario = ScenarioEngine.get_scenario("Weak Signal Corner")
+        
+        # 1. Run Simulator
+        sim_record = self.simulator.generate_telemetry(self.clients, scenario)
+        
+        # 2. Check recommendations
+        self.assertTrue(len(sim_record.recommendations) > 0)
+        top_rec = sorted(sim_record.recommendations, key=lambda x: x["confidence"], reverse=True)[0]
+        
+        print(f"Metrics: RSSI={sim_record.rssi}, retry={sim_record.retry_rate}, QoE={sim_record.qoe_score}, path_loss={sim_record.path_loss_db}")
+        # Should NOT be Healthy
+        self.assertNotEqual(top_rec["root_cause"], "Healthy")
 
     def test_pipeline_field_consistency(self):
         """
